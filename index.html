@@ -275,6 +275,8 @@ function loadAll() {
     if (raw) {
       const data = JSON.parse(raw);
       matches = data.matches || [];
+      // Backward-compat: default to 2 innings for matches saved before this option existed
+      matches.forEach(m => { if (m.totalInnings == null) m.totalInnings = 2; });
     }
   } catch (e) { console.error('Load failed', e); matches = []; }
 }
@@ -299,6 +301,7 @@ function createMatch(opts) {
     teamB: opts.teamB || 'Away',
     oversTotal: opts.oversTotal || 20,
     wicketsToOut: opts.wicketsToOut || 10,
+    totalInnings: opts.totalInnings || 2,   // 1 or 2
     playersA: opts.playersA || [],
     playersB: opts.playersB || [],
     pairsConfig: opts.format === 'pairs' ? {
@@ -666,9 +669,9 @@ function endOver() {
 function endInnings() {
   const ing = currentInnings();
   ing.complete = true;
-  if (match.currentInnings === 0) {
-    // Start 2nd innings
-    match.currentInnings = 1;
+  if (match.currentInnings + 1 < match.totalInnings) {
+    // Start next innings
+    match.currentInnings += 1;
     const next = match.battingFirst === 'a' ? 'b' : 'a';
     match.innings.push(createInnings(match, next));
     showToast('Innings complete — next innings starting');
@@ -685,6 +688,12 @@ function matchTarget() {
 }
 
 function determineResult() {
+  if (match.totalInnings === 1) {
+    const ing = match.innings[0];
+    const team = ing.battingTeam === 'a' ? match.teamA : match.teamB;
+    match.result = `${team} scored ${ing.score}/${ing.wickets} in ${oversString(ing.ballsBowled)} overs`;
+    return;
+  }
   const a = match.innings[0].score;
   const b = match.innings[1].score;
   const teamA = match.battingFirst === 'a' ? match.teamA : match.teamB;
@@ -872,6 +881,13 @@ function renderSetup() {
           <select id="format">
             <option value="standard">Standard (Limited Overs)</option>
             <option value="pairs">Pairs Cricket</option>
+          </select>
+        </label>
+        <label>
+          <span>Number of innings</span>
+          <select id="totalInnings">
+            <option value="2">2 — both teams bat</option>
+            <option value="1">1 — one team bats only</option>
           </select>
         </label>
         <div class="row">
@@ -1408,6 +1424,7 @@ function handleAction(e) {
       teamA: document.getElementById('teamA').value || 'Home',
       teamB: document.getElementById('teamB').value || 'Away',
       oversTotal: parseInt(document.getElementById('oversTotal').value) || 20,
+      totalInnings: parseInt(document.getElementById('totalInnings').value) || 2,
       battingFirst: document.getElementById('battingFirst').value,
       playersA: document.getElementById('playersA').value.split('\n').map(s => s.trim()).filter(Boolean),
       playersB: document.getElementById('playersB').value.split('\n').map(s => s.trim()).filter(Boolean),
