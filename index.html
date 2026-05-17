@@ -10,6 +10,8 @@
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-192.png">
 <link href="https://fonts.googleapis.com/css2?family=Dosis:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="jspdf.umd.min.js"></script>
+<script src="jspdf.plugin.autotable.min.js"></script>
 <title>Cricket Scorer</title>
 <style>
 :root {
@@ -1065,10 +1067,12 @@ function renderScorecard() {
     <header>
       <button class="icon-btn" data-action="back-to-scoring">←</button>
       <h1>Scorecard</h1>
+      <button class="icon-btn" data-action="export-pdf" title="Export PDF">⤓</button>
     </header>
     <main>
       ${match.result ? `<div class="card center" style="background:var(--gold); color:var(--navy-dark);"><h2 style="margin:0; color:var(--navy-dark);">${escapeHtml(match.result)}</h2></div>` : ''}
       ${html}
+      <button class="btn btn-primary btn-full" data-action="export-pdf" style="margin-top:8px;">⤓ Export PDF</button>
       <div style="height:40px;"></div>
     </main>
   `;
@@ -1192,6 +1196,183 @@ function renderModal() {
 }
 
 // =========================================================================
+// PDF EXPORT
+// =========================================================================
+function generatePDF() {
+  if (!window.jspdf || !window.jspdf.jsPDF) {
+    showToast('PDF library not loaded. Refresh and try again.');
+    return;
+  }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const margin = 40;
+  let y = 0;
+
+  // Header banner
+  doc.setFillColor(30, 58, 95);
+  doc.rect(0, 0, pageWidth, 72, 'F');
+  doc.setTextColor(255, 255, 255);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(20);
+  doc.text(`${match.teamA} v ${match.teamB}`, margin, 34);
+  doc.setFontSize(10);
+  doc.setFont('helvetica', 'normal');
+  const date = new Date(match.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+  const fmt = match.format === 'pairs'
+    ? `Pairs cricket · ${match.pairsConfig.pairCount} pairs × ${match.pairsConfig.oversPerPair} overs`
+    : `${match.oversTotal} overs per innings`;
+  doc.text(`${date}  ·  ${fmt}`, margin, 54);
+  y = 92;
+
+  // Result banner
+  if (match.result) {
+    doc.setFillColor(201, 169, 97);
+    doc.rect(margin, y - 4, pageWidth - margin*2, 22, 'F');
+    doc.setTextColor(18, 36, 56);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
+    doc.text(match.result, margin + 10, y + 11);
+    y += 32;
+  }
+
+  doc.setTextColor(0, 0, 0);
+
+  // Per innings
+  match.innings.forEach((ing) => {
+    if (y > pageHeight - 120) { doc.addPage(); y = margin; }
+
+    const team = ing.battingTeam === 'a' ? match.teamA : match.teamB;
+    doc.setFillColor(245, 244, 240);
+    doc.rect(margin, y - 4, pageWidth - margin*2, 26, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(13);
+    doc.setTextColor(30, 58, 95);
+    doc.text(`${team} — ${ing.score}/${ing.wickets} (${oversString(ing.ballsBowled)} overs)`, margin + 8, y + 14);
+    y += 32;
+
+    // Batters
+    const battersInPlay = ing.batters.filter(b => b.in || b.runs > 0 || b.balls > 0);
+    if (battersInPlay.length > 0) {
+      doc.autoTable({
+        startY: y,
+        head: [['Batter', 'R', 'B', '4s', '6s', 'How out']],
+        body: battersInPlay.map(b => [
+          b.name,
+          String(b.runs),
+          String(b.balls),
+          String(b.fours),
+          String(b.sixes),
+          b.out ? b.howOut : (b.in ? 'not out' : '')
+        ]),
+        theme: 'striped',
+        headStyles: { fillColor: [30, 58, 95], textColor: [255, 255, 255], fontSize: 9, fontStyle: 'bold' },
+        bodyStyles: { fontSize: 10, cellPadding: 4 },
+        columnStyles: { 1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right' }, 4: { halign: 'right' } },
+        margin: { left: margin, right: margin }
+      });
+      y = doc.lastAutoTable.finalY + 6;
+    }
+
+    // Extras line
+    const ex = ing.extras;
+    const totalEx = ex.wides + ex.noBalls + ex.byes + ex.legByes + (ex.penalty || 0);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(80, 80, 80);
+    doc.text(`Extras: ${totalEx}  (w ${ex.wides}, nb ${ex.noBalls}, b ${ex.byes}, lb ${ex.legByes})`, margin, y + 8);
+    doc.setFont('helvetica', 'bold');
+    doc.text(`Total: ${ing.score}/${ing.wickets} in ${oversString(ing.ballsBowled)} overs`, pageWidth - margin, y + 8, { align: 'right' });
+    y += 22;
+
+    // Bowlers
+    const bowlersBowled = ing.bowlers.filter(b => b.balls > 0);
+    if (bowlersBowled.length > 0) {
+      if (y > pageHeight - 100) { doc.addPage(); y = margin; }
+      doc.autoTable({
+        startY: y,
+        head: [['Bowler', 'O', 'M', 'R', 'W']],
+        body: bowlersBowled.map(b => [
+          b.name,
+          oversString(b.balls),
+          String(b.maidens),
+          String(b.runs),
+          String(b.wickets)
+        ]),
+        theme: 'striped',
+        headStyles: { fillColor: [30, 58, 95], textColor: [255, 255, 255], fontSize: 9, fontStyle: 'bold' },
+        bodyStyles: { fontSize: 10, cellPadding: 4 },
+        columnStyles: { 1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right' }, 4: { halign: 'right' } },
+        margin: { left: margin, right: margin }
+      });
+      y = doc.lastAutoTable.finalY + 16;
+    }
+
+    // Pair breakdown
+    if (match.format === 'pairs' && ing.pairs) {
+      if (y > pageHeight - 100) { doc.addPage(); y = margin; }
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.setTextColor(30, 58, 95);
+      doc.text('Pair breakdown', margin, y);
+      y += 4;
+      doc.autoTable({
+        startY: y,
+        head: [['Pair', 'Batters', 'Runs', 'Wkts', 'Overs']],
+        body: ing.pairs.map((p, i) => [
+          String(i+1),
+          `${ing.batters[p.batters[0]] ? ing.batters[p.batters[0]].name : ''} & ${ing.batters[p.batters[1]] ? ing.batters[p.batters[1]].name : ''}`,
+          String(p.runs),
+          String(p.wickets),
+          oversString(p.ballsBowled)
+        ]),
+        theme: 'striped',
+        headStyles: { fillColor: [201, 169, 97], textColor: [18, 36, 56], fontSize: 9, fontStyle: 'bold' },
+        bodyStyles: { fontSize: 10, cellPadding: 4 },
+        columnStyles: { 0: { halign: 'center' }, 2: { halign: 'right' }, 3: { halign: 'right' }, 4: { halign: 'right' } },
+        margin: { left: margin, right: margin }
+      });
+      y = doc.lastAutoTable.finalY + 20;
+    }
+  });
+
+  // Footer on each page
+  const pageCount = doc.getNumberOfPages();
+  for (let i = 1; i <= pageCount; i++) {
+    doc.setPage(i);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(150, 150, 150);
+    doc.text(`Scored on Cricket Scorer  ·  ${new Date().toLocaleString('en-GB')}  ·  Page ${i} of ${pageCount}`, margin, pageHeight - 20);
+  }
+
+  const safe = s => String(s).replace(/[^a-zA-Z0-9]/g, '_');
+  const dateStr = new Date(match.createdAt).toISOString().split('T')[0];
+  const filename = `${safe(match.teamA)}-v-${safe(match.teamB)}-${dateStr}.pdf`;
+
+  // Try Web Share API with file (best on iOS — opens share sheet → Files, Mail, Messages)
+  try {
+    if (navigator.share && navigator.canShare) {
+      const blob = doc.output('blob');
+      const file = new File([blob], filename, { type: 'application/pdf' });
+      if (navigator.canShare({ files: [file] })) {
+        navigator.share({
+          files: [file],
+          title: `${match.teamA} v ${match.teamB} — Scorecard`,
+          text: `${match.teamA} v ${match.teamB}${match.result ? ' — ' + match.result : ''}`
+        }).catch(err => {
+          if (err.name !== 'AbortError') doc.save(filename);
+        });
+        return;
+      }
+    }
+  } catch (e) { /* fall through to save */ }
+
+  doc.save(filename);
+}
+
+// =========================================================================
 // EVENT HANDLERS
 // =========================================================================
 function attachEventHandlers() {
@@ -1284,6 +1465,7 @@ function handleAction(e) {
   if (action === 'undo') { undo(); return; }
   if (action === 'scorecard') { closeModal(); view = 'scorecard'; render(); return; }
   if (action === 'back-to-scoring') { view = 'scoring'; render(); return; }
+  if (action === 'export-pdf') { generatePDF(); return; }
   if (action === 'select-bowler') { promptBowler(false); return; }
   if (action === 'pick-bowler') { pickBowler(parseInt(el.dataset.idx)); upsertMatch(); render(); return; }
   if (action === 'pick-batter') {
