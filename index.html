@@ -488,9 +488,11 @@ function addExtra(type, runs) {
   postBall();
 }
 
-function addWicket(howOut, batterOutPos, runsCompleted) {
+function addWicket(howOut, batterOutPos, runsCompleted, crossed, fielderName) {
   // batterOutPos: 'striker' | 'non-striker' (mostly striker; non-striker only for run out)
   // runsCompleted: runs taken before wicket (run-outs etc.)
+  // crossed: true if batters crossed before catch/run-out (affects who is on strike next)
+  // fielderName: catcher's name for Caught dismissals (or null)
   if (needBowler()) { promptBowler(); return; }
   snapshot();
   const ing = currentInnings();
@@ -499,7 +501,7 @@ function addWicket(howOut, batterOutPos, runsCompleted) {
   const ns = nonStriker();
   const runs = runsCompleted || 0;
 
-  // Add the completed runs first
+  // Add the completed runs first (to striker, since they hit the ball)
   s.runs += runs;
   b.runs += runs;
   b.runsThisOver += runs;
@@ -513,7 +515,7 @@ function addWicket(howOut, batterOutPos, runsCompleted) {
   // Mark batter out
   const outBatter = batterOutPos === 'striker' ? s : ns;
   outBatter.out = true;
-  outBatter.howOut = formatHowOut(howOut, b.name);
+  outBatter.howOut = formatHowOut(howOut, b.name, fielderName);
 
   // Ball counts as bowled (unless wicket on a wide/NB — handled separately)
   s.balls += 1;
@@ -533,33 +535,32 @@ function addWicket(howOut, batterOutPos, runsCompleted) {
   const bowlerCredit = !['Run out', 'Retired', 'Obstructing'].includes(howOut);
   if (bowlerCredit) b.wickets += 1;
 
-  // Cross-runs: if batters crossed before run-out, they swap (but one is out)
-  // Simpler: if striker out → new batter comes in at striker's end
-  // If non-striker out → new batter at non-striker's end, striker stays
-
   ing.thisOver.push({ runs, type: 'wicket', label: 'W' });
   ing.balls.push({ batter: outBatter.idx, bowler: b.idx, runs, type: 'wicket', howOut: outBatter.howOut, label: 'W' });
 
   ing.freeHit = false;
 
-  // Check if all out / end of innings
+  // Check if all out / end of innings (standard format)
   if (match.format === 'standard' && ing.wickets >= match.wicketsToOut) {
     endInnings();
+    upsertMatch();
+    render();
     return;
   }
-  // In pairs cricket, batters DON'T leave the field — they keep batting, just lose 5 runs
+
+  // Pairs cricket: batter doesn't leave — they keep batting, just lose 5 runs
   if (match.format === 'pairs') {
-    // Swap strike if batter was striker (so other partner faces next ball)
-    if (batterOutPos === 'striker' && runs % 2 === 0) swapStrike();
-    if (batterOutPos === 'striker' && runs % 2 === 1) {} // already swapped notionally
-    // Reset "out" flag — they keep batting in pairs
     outBatter.out = false;
     outBatter.howOut = null;
+    // Handle strike: swap if odd runs, or if batters crossed
+    if (runs % 2 === 1) swapStrike();
+    if (crossed && runs % 2 === 0) swapStrike();
     postBall();
     return;
   }
-  // Standard: prompt for new batter
-  promptNewBatter(batterOutPos);
+
+  // Standard: prompt for new batter, passing crossed info for strike rotation
+  promptNewBatter(batterOutPos, crossed);
 }
 
 function swapStrike() {
@@ -567,12 +568,17 @@ function swapStrike() {
   [ing.striker, ing.nonStriker] = [ing.nonStriker, ing.striker];
 }
 
-function formatHowOut(method, bowlerName) {
+function formatHowOut(method, bowlerName, fielderName) {
   if (method === 'Bowled') return `b ${bowlerName}`;
   if (method === 'LBW') return `lbw b ${bowlerName}`;
-  if (method === 'Caught') return `c & b ${bowlerName}`;  // simplistic; fielder unknown
+  if (method === 'Caught') {
+    if (!fielderName || fielderName === bowlerName) return `c & b ${bowlerName}`;
+    return `c ${fielderName} b ${bowlerName}`;
+  }
   if (method === 'Stumped') return `st b ${bowlerName}`;
-  if (method === 'Run out') return `run out`;
+  if (method === 'Run out') return fielderName ? `run out (${fielderName})` : 'run out';
+  if (method === 'Hit wicket') return `hit wicket b ${bowlerName}`;
+  if (method === 'Retired') return 'retired';
   return method;
 }
 
@@ -701,7 +707,7 @@ function pickBowler(idx) {
   ing.currentBowler = idx;
   closeModal();
 }
-function promptNewBatter(position) {
+function promptNewBatter(position, crossed) {
   const ing = currentInnings();
   const available = ing.batters.filter(b => !b.out && !b.in);
   if (available.length === 0) {
@@ -711,15 +717,31 @@ function promptNewBatter(position) {
     render();
     return;
   }
-  modal = { type: 'select-batter', data: { batters: available, position } };
+  modal = { type: 'select-batter', data: { batters: available, position, crossed } };
   render();
 }
-function pickBatter(idx, position) {
+function pickBatter(idx, position, crossed) {
   const ing = currentInnings();
   ing.batters[idx].in = true;
-  if (position === 'striker') ing.striker = idx;
-  else ing.nonStriker = idx;
+  // If batters crossed, the not-out batter has moved to the dismissed batter's end,
+  // and the new batter takes the vacant end.
+  if (position === 'striker') {
+    if (crossed) {
+      ing.striker = ing.nonStriker;
+      ing.nonStriker = idx;
+    } else {
+      ing.striker = idx;
+    }
+  } else {  // non-striker out
+    if (crossed) {
+      ing.nonStriker = ing.striker;
+      ing.striker = idx;
+    } else {
+      ing.nonStriker = idx;
+    }
+  }
   closeModal();
+  postBall();
 }
 function promptExtraRuns(extraType) {
   modal = { type: 'extra-runs', data: { extraType } };
@@ -730,7 +752,23 @@ function promptWicket() {
   render();
 }
 function pickWicketMethod(method) {
-  modal = { type: 'wicket-detail', data: { method } };
+  if (method === 'Caught') {
+    const ing = currentInnings();
+    modal = { type: 'wicket-fielder', data: { method, fielders: ing.bowlers, bowlerIdx: ing.currentBowler } };
+  } else if (method === 'Run out') {
+    modal = { type: 'wicket-run-out', data: { method, runsCompleted: 0, batterOutPos: null } };
+  } else {
+    modal = { type: 'wicket-confirm', data: { method } };
+  }
+  render();
+}
+function pickFielder(fielderName) {
+  // Called after Caught — proceed to crossed question
+  modal = { type: 'wicket-crossed', data: { method: 'Caught', batterOutPos: 'striker', runsCompleted: 0, fielderName } };
+  render();
+}
+function promptCrossed(data) {
+  modal = { type: 'wicket-crossed', data };
   render();
 }
 function closeModal() { modal = null; render(); }
@@ -1079,25 +1117,53 @@ function renderModal() {
       </div>
       <button class="btn btn-ghost btn-full" data-action="close-modal" style="margin-top:10px;">Cancel</button>
     `;
-  } else if (modal.type === 'wicket-detail') {
+  } else if (modal.type === 'wicket-confirm') {
     const method = modal.data.method;
-    const askRuns = method === 'Run out';
     body = `
       <h2>${escapeHtml(method)}</h2>
-      ${askRuns ? `
-        <div class="muted" style="margin-bottom:8px;">Runs completed before run-out:</div>
-        <div class="modal-grid">
-          ${[0,1,2,3].map(n => `<button class="btn btn-secondary" data-action="wicket-runs-batter" data-method="${method}" data-runs="${n}">${n}</button>`).join('')}
-        </div>
-        <div class="muted" style="margin-top:14px; margin-bottom:8px;">Which batter is out?</div>
-        <div class="row">
-          <button class="btn btn-primary" data-action="finalise-wicket" data-method="${method}" data-position="striker" data-runs="0">Striker</button>
-          <button class="btn btn-primary" data-action="finalise-wicket" data-method="${method}" data-position="non-striker" data-runs="0">Non-striker</button>
-        </div>
-        <div class="muted" style="margin-top:6px; font-size:0.8rem;">Tap a runs number first (defaults to 0), then choose batter.</div>
-      ` : `
-        <button class="btn btn-primary btn-full" data-action="finalise-wicket" data-method="${method}" data-position="striker" data-runs="0">Confirm</button>
-      `}
+      <button class="btn btn-primary btn-full" data-action="finalise-wicket" data-method="${method}" data-position="striker" data-runs="0">Confirm ${escapeHtml(method)}</button>
+      <button class="btn btn-ghost btn-full" data-action="close-modal" style="margin-top:10px;">Cancel</button>
+    `;
+  } else if (modal.type === 'wicket-fielder') {
+    const { fielders, bowlerIdx } = modal.data;
+    body = `
+      <h2>Caught by…</h2>
+      <div class="muted" style="margin-bottom:8px; font-size:0.85rem;">Tap the fielder who took the catch.</div>
+      <div class="modal-list">
+        ${fielders.map(f => `
+          <button class="btn btn-secondary" data-action="pick-fielder" data-name="${escapeHtml(f.name)}">
+            ${escapeHtml(f.name)}${f.idx === bowlerIdx ? ' <span style="margin-left:auto; color:var(--muted); font-size:0.8rem;">(c &amp; b)</span>' : ''}
+          </button>
+        `).join('')}
+      </div>
+      <button class="btn btn-ghost btn-full" data-action="close-modal" style="margin-top:10px;">Cancel</button>
+    `;
+  } else if (modal.type === 'wicket-run-out') {
+    const d = modal.data;
+    body = `
+      <h2>Run Out</h2>
+      <div class="muted" style="margin-bottom:8px;">Runs completed before run-out:</div>
+      <div class="modal-grid">
+        ${[0,1,2,3].map(n => `
+          <button class="btn ${d.runsCompleted === n ? 'btn-primary' : 'btn-secondary'}" data-action="run-out-runs" data-runs="${n}">${n}</button>
+        `).join('')}
+      </div>
+      <div class="muted" style="margin-top:14px; margin-bottom:8px;">Which batter is out?</div>
+      <div class="row">
+        <button class="btn btn-primary" data-action="run-out-batter" data-position="striker">Striker</button>
+        <button class="btn btn-primary" data-action="run-out-batter" data-position="non-striker">Non-striker</button>
+      </div>
+      <button class="btn btn-ghost btn-full" data-action="close-modal" style="margin-top:10px;">Cancel</button>
+    `;
+  } else if (modal.type === 'wicket-crossed') {
+    const d = modal.data;
+    body = `
+      <h2>Did batters cross?</h2>
+      <div class="muted" style="margin-bottom:10px; font-size:0.9rem;">If they crossed, the not-out batter is now at the other end.</div>
+      <div class="row">
+        <button class="btn btn-primary" data-action="finalise-wicket-crossed" data-crossed="false">Didn't cross</button>
+        <button class="btn btn-primary" data-action="finalise-wicket-crossed" data-crossed="true">Crossed</button>
+      </div>
       <button class="btn btn-ghost btn-full" data-action="close-modal" style="margin-top:10px;">Cancel</button>
     `;
   } else if (modal.type === 'menu') {
@@ -1179,20 +1245,31 @@ function handleAction(e) {
   if (action === 'confirm-extra') { closeModal(); addExtra(el.dataset.type, parseInt(el.dataset.runs)); return; }
   if (action === 'wicket') { promptWicket(); return; }
   if (action === 'wicket-method') { pickWicketMethod(el.dataset.method); return; }
-  if (action === 'wicket-runs-batter') {
-    // Just store the runs choice, wait for batter pick
+  if (action === 'pick-fielder') { pickFielder(el.dataset.name); return; }
+  if (action === 'run-out-runs') {
     modal.data.runsCompleted = parseInt(el.dataset.runs);
-    // Visual highlight
-    document.querySelectorAll('[data-action="wicket-runs-batter"]').forEach(b => { b.classList.remove('btn-primary'); b.classList.add('btn-secondary'); });
-    el.classList.remove('btn-secondary'); el.classList.add('btn-primary');
+    render();
+    return;
+  }
+  if (action === 'run-out-batter') {
+    modal.data.batterOutPos = el.dataset.position;
+    promptCrossed(modal.data);
+    return;
+  }
+  if (action === 'finalise-wicket-crossed') {
+    const crossed = el.dataset.crossed === 'true';
+    const d = modal.data;
+    closeModal();
+    addWicket(d.method, d.batterOutPos, d.runsCompleted || 0, crossed, d.fielderName || null);
     return;
   }
   if (action === 'finalise-wicket') {
+    // Simple dismissals (Bowled, LBW, Stumped, Hit wicket, Retired) — no crossed question
     const method = el.dataset.method;
     const position = el.dataset.position;
-    const runs = (modal.data && modal.data.runsCompleted) || parseInt(el.dataset.runs) || 0;
+    const runs = parseInt(el.dataset.runs) || 0;
     closeModal();
-    addWicket(method, position, runs);
+    addWicket(method, position, runs, false, null);
     return;
   }
   if (action === 'undo') { undo(); return; }
@@ -1200,7 +1277,11 @@ function handleAction(e) {
   if (action === 'back-to-scoring') { view = 'scoring'; render(); return; }
   if (action === 'select-bowler') { promptBowler(false); return; }
   if (action === 'pick-bowler') { pickBowler(parseInt(el.dataset.idx)); upsertMatch(); render(); return; }
-  if (action === 'pick-batter') { pickBatter(parseInt(el.dataset.idx), el.dataset.position); upsertMatch(); render(); return; }
+  if (action === 'pick-batter') {
+    const crossed = modal && modal.data ? !!modal.data.crossed : false;
+    pickBatter(parseInt(el.dataset.idx), el.dataset.position, crossed);
+    return;
+  }
   if (action === 'show-menu') { modal = { type: 'menu' }; render(); return; }
   if (action === 'change-bowler') { closeModal(); promptBowler(true); return; }
   if (action === 'swap-batters') {
