@@ -40,21 +40,31 @@ input, textarea, select { -webkit-user-select: text; user-select: text; font-fam
 header {
   background: var(--navy);
   color: white;
-  padding: 12px 16px;
+  padding: 8px 12px;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   box-shadow: var(--shadow);
+  flex-shrink: 0;
 }
-header h1 { margin: 0; font-size: 1.2rem; font-weight: 600; flex: 1; letter-spacing: 0.3px; }
+header h1 { margin: 0; font-size: 1.05rem; font-weight: 600; flex: 1; letter-spacing: 0.3px; }
 .icon-btn {
-  background: transparent; border: none; color: white; font-size: 1.5rem;
-  width: 40px; height: 40px; border-radius: 8px; cursor: pointer;
+  background: transparent; border: none; color: white; font-size: 1.4rem;
+  width: 36px; height: 36px; border-radius: 8px; cursor: pointer;
   display: flex; align-items: center; justify-content: center; padding: 0;
 }
 .icon-btn:active { background: rgba(255,255,255,0.15); }
 
-main { flex: 1; overflow-y: auto; padding: 12px; }
+main { flex: 1; overflow-y: auto; padding: 12px; min-height: 0; }
+main.scoring-view {
+  overflow: hidden;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+main.scoring-view .card { margin-bottom: 0; padding: 10px 12px; }
+main.scoring-view .scoreboard { margin-bottom: 0; padding: 10px 14px; }
 
 .card {
   background: var(--card);
@@ -117,15 +127,15 @@ label > span { display: block; margin-bottom: 4px; font-size: 0.85rem; color: va
   border-radius: 12px; padding: 14px; margin-bottom: 12px;
   box-shadow: var(--shadow);
 }
-.scoreboard .innings-label { font-size: 0.85rem; opacity: 0.85; letter-spacing: 0.5px; text-transform: uppercase; }
-.scoreboard .main-score { font-size: 2.8rem; font-weight: 700; line-height: 1; margin: 4px 0; }
-.scoreboard .main-score .ov { font-size: 1.4rem; opacity: 0.85; font-weight: 500; }
-.scoreboard .target { font-size: 0.95rem; color: var(--gold); margin-top: 4px; }
-.scoreboard .pair-info { font-size: 0.9rem; color: var(--gold); margin-top: 4px; }
+.scoreboard .innings-label { font-size: 0.75rem; opacity: 0.85; letter-spacing: 0.4px; text-transform: uppercase; }
+.scoreboard .main-score { font-size: 2.1rem; font-weight: 700; line-height: 1; margin: 2px 0; }
+.scoreboard .main-score .ov { font-size: 1.15rem; opacity: 0.85; font-weight: 500; }
+.scoreboard .target { font-size: 0.85rem; color: var(--gold); margin-top: 2px; }
+.scoreboard .pair-info { font-size: 0.8rem; color: var(--gold); margin-top: 2px; }
 
 .batters-row, .bowler-row {
   display: flex; justify-content: space-between; align-items: baseline;
-  padding: 8px 0; border-bottom: 1px solid var(--line);
+  padding: 4px 0; border-bottom: 1px solid var(--line);
   font-size: 0.95rem;
 }
 .batters-row:last-child, .bowler-row:last-child { border-bottom: none; }
@@ -133,35 +143,43 @@ label > span { display: block; margin-bottom: 4px; font-size: 0.85rem; color: va
 .batters-row .stats, .bowler-row .stats { color: var(--muted); font-variant-numeric: tabular-nums; }
 .batters-row.striker .name::after { content: ' *'; color: var(--gold); }
 
-.this-over { display: flex; gap: 6px; flex-wrap: wrap; min-height: 32px; align-items: center; }
+.this-over-inline {
+  display: flex; align-items: center; gap: 8px;
+  padding-top: 5px; margin-top: 2px; border-top: 1px solid var(--line);
+}
+.this-over-inline .ov-label {
+  font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--muted); font-weight: 600; flex-shrink: 0;
+}
+.this-over { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; }
 .ball-pip {
   display: inline-flex; align-items: center; justify-content: center;
-  min-width: 28px; height: 28px; padding: 0 6px;
+  min-width: 24px; height: 24px; padding: 0 5px;
   border-radius: 50%; background: var(--bg);
-  font-weight: 600; font-size: 0.9rem;
+  font-weight: 600; font-size: 0.8rem;
   border: 1px solid var(--line);
 }
 .ball-pip.boundary { background: var(--navy); color: white; border-color: var(--navy); }
 .ball-pip.wicket { background: var(--red); color: white; border-color: var(--red); }
-.ball-pip.extra { background: var(--gold); color: var(--navy-dark); border-color: var(--gold); font-size: 0.78rem; }
+.ball-pip.extra { background: var(--gold); color: var(--navy-dark); border-color: var(--gold); font-size: 0.7rem; }
 
 /* Run buttons */
-.run-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 8px; }
+.run-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 6px; }
 .run-btn {
-  height: 56px; font-size: 1.4rem; font-weight: 700;
+  height: 48px; font-size: 1.25rem; font-weight: 700;
   background: white; color: var(--navy); border: 1.5px solid var(--navy);
-  border-radius: 12px; cursor: pointer; font-family: inherit;
+  border-radius: 10px; cursor: pointer; font-family: inherit;
 }
 .run-btn:active { background: var(--navy); color: white; }
 .run-btn.boundary { background: var(--navy); color: white; }
 .run-btn.boundary:active { background: var(--navy-dark); }
 
 /* Extra buttons */
-.extra-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.extra-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; }
 .extra-btn {
-  height: 48px; font-size: 0.95rem; font-weight: 700;
+  height: 40px; font-size: 0.88rem; font-weight: 700;
   background: white; color: var(--navy-dark); border: 1.5px solid var(--gold);
-  border-radius: 10px; cursor: pointer; font-family: inherit;
+  border-radius: 8px; cursor: pointer; font-family: inherit;
 }
 .extra-btn:active { background: var(--gold); }
 .extra-btn.wicket { border-color: var(--red); color: var(--red); }
@@ -169,13 +187,12 @@ label > span { display: block; margin-bottom: 4px; font-size: 0.85rem; color: va
 
 /* Bottom action bar */
 .action-bar {
-  position: sticky; bottom: 0; left: 0; right: 0;
   background: var(--bg);
-  padding: 8px 0 0 0;
-  border-top: 1px solid var(--line);
-  display: flex; gap: 8px;
+  padding: 0;
+  display: flex; gap: 6px;
+  flex-shrink: 0;
 }
-.action-bar .btn { flex: 1; padding: 12px; font-size: 0.95rem; }
+.action-bar .btn { flex: 1; padding: 8px; font-size: 0.88rem; min-height: 36px; }
 
 /* Modal */
 .modal-backdrop {
@@ -917,7 +934,7 @@ function renderScoring() {
       <h1>${escapeHtml(match.teamA)} v ${escapeHtml(match.teamB)}</h1>
       <button class="icon-btn" data-action="show-menu">⋯</button>
     </header>
-    <main>
+    <main class="scoring-view">
       <div class="scoreboard">
         <div class="innings-label">${escapeHtml(inningsLabel)}</div>
         <div class="main-score">${ing.score}/${ing.wickets} <span class="ov">(${oversString(ing.ballsBowled)})</span></div>
@@ -926,7 +943,6 @@ function renderScoring() {
       </div>
 
       <div class="card">
-        <h3>Batters</h3>
         <div class="batters-row ${ing.striker === s.idx ? 'striker' : ''}">
           <span class="name">${escapeHtml(s.name)}</span>
           <span class="stats">${s.runs} (${s.balls})</span>
@@ -935,18 +951,14 @@ function renderScoring() {
           <span class="name">${escapeHtml(ns.name)}</span>
           <span class="stats">${ns.runs} (${ns.balls})</span>
         </div>
-      </div>
-
-      <div class="card">
-        <h3>Bowling</h3>
-        <div class="bowler-row">
-          <span class="name">${b ? escapeHtml(b.name) : '<em style="color:var(--muted);">Select bowler →</em>'}</span>
+        <div class="bowler-row" ${!b ? 'data-action="select-bowler" style="cursor:pointer;"' : ''}>
+          <span class="name" style="${!b ? 'color:var(--red); font-style:italic;' : ''}">${b ? escapeHtml(b.name) : 'Tap to select bowler →'}</span>
           <span class="stats">${b ? `${b.wickets}-${b.runs} (${oversString(b.balls)})` : ''}</span>
         </div>
-        <div style="margin-top:10px;">
-          <div style="font-size:0.8rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">This over</div>
+        <div class="this-over-inline">
+          <span class="ov-label">Over</span>
           <div class="this-over">
-            ${ing.thisOver.length === 0 ? '<span class="muted">—</span>' : ing.thisOver.map(p => {
+            ${ing.thisOver.length === 0 ? '<span class="muted" style="font-size:0.85rem;">—</span>' : ing.thisOver.map(p => {
               if (p.type === 'wicket') return `<span class="ball-pip wicket">W</span>`;
               if (p.type === 'extra') return `<span class="ball-pip extra">${escapeHtml(p.label)}</span>`;
               if (p.runs === 4 || p.runs === 6) return `<span class="ball-pip boundary">${p.runs}</span>`;
@@ -954,13 +966,11 @@ function renderScoring() {
             }).join('')}
           </div>
         </div>
-        ${!b ? `<button class="btn btn-primary btn-full" style="margin-top:10px;" data-action="select-bowler">Select Bowler</button>` : ''}
       </div>
 
       ${ing.freeHit ? '<div class="free-hit-banner">⚠ FREE HIT</div>' : ''}
 
       <div class="card">
-        <h3>Runs</h3>
         <div class="run-grid">
           <button class="run-btn" data-action="runs" data-runs="0">0</button>
           <button class="run-btn" data-action="runs" data-runs="1">1</button>
@@ -969,7 +979,6 @@ function renderScoring() {
           <button class="run-btn boundary" data-action="runs" data-runs="4">4</button>
           <button class="run-btn boundary" data-action="runs" data-runs="6">6</button>
         </div>
-        <h3 style="margin-top:8px;">Extras / Wicket</h3>
         <div class="extra-grid">
           <button class="extra-btn" data-action="extra" data-type="wd">Wd</button>
           <button class="extra-btn" data-action="extra" data-type="nb">NB</button>
