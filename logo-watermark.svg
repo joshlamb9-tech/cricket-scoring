@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" preserveAspectRatio="xMidYMid meet">
+  <!-- Placeholder Mowden Hall watermark — replace this file with the real school crest -->
+  <circle cx="200" cy="200" r="160" stroke="#1e3a5f" stroke-width="4" fill="none"/>
+  <circle cx="200" cy="200" r="150" stroke="#1e3a5f" stroke-width="1" fill="none"/>
+  <text x="200" y="195" text-anchor="middle" font-family="Georgia, serif" font-size="120" font-weight="700" fill="#1e3a5f" letter-spacing="-4">MH</text>
+  <text x="200" y="260" text-anchor="middle" font-family="Georgia, serif" font-size="22" font-weight="600" fill="#1e3a5f" letter-spacing="6">MOWDEN HALL</text>
+  <line x1="120" y1="280" x2="280" y2="280" stroke="#1e3a5f" stroke-width="1"/>
+  <text x="200" y="305" text-anchor="middle" font-family="Georgia, serif" font-size="13" fill="#1e3a5f" letter-spacing="3" font-style="italic">EST. 1935</text>
+</svg>

@@ -63,7 +63,21 @@ html, body {
   -webkit-user-select: none; user-select: none;
   font-size: 16px;
   font-variant-numeric: tabular-nums;
+  position: relative;
 }
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: url('logo-watermark.svg');
+  background-position: center center;
+  background-repeat: no-repeat;
+  background-size: min(70%, 420px) auto;
+  opacity: 0.045;
+  pointer-events: none;
+  z-index: 0;
+}
+.app { position: relative; z-index: 1; }
 input, textarea, select { -webkit-user-select: text; user-select: text; font-family: inherit; }
 .app { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
 
@@ -604,7 +618,13 @@ function loadAll() {
       const data = JSON.parse(raw);
       matches = data.matches || [];
       // Backward-compat: default to 2 innings for matches saved before this option existed
-      matches.forEach(m => { if (m.totalInnings == null) m.totalInnings = 2; });
+      matches.forEach(m => {
+        if (m.totalInnings == null) m.totalInnings = 2;
+        if (m.widePenalty == null) m.widePenalty = 1;
+        if (m.noBallPenalty == null) m.noBallPenalty = 1;
+        if (m.wideRebowled == null) m.wideRebowled = true;
+        if (m.noBallRebowled == null) m.noBallRebowled = true;
+      });
     }
   } catch (e) { console.error('Load failed', e); matches = []; }
 }
@@ -638,6 +658,10 @@ function createMatch(opts) {
       runsPerWicket: -5,
       startScore: opts.startScore || 0,
     } : null,
+    widePenalty: opts.widePenalty != null ? opts.widePenalty : 1,
+    noBallPenalty: opts.noBallPenalty != null ? opts.noBallPenalty : 1,
+    wideRebowled: opts.wideRebowled != null ? opts.wideRebowled : true,
+    noBallRebowled: opts.noBallRebowled != null ? opts.noBallRebowled : true,
     tossWonBy: opts.tossWonBy,              // 'a' | 'b'
     battingFirst: opts.battingFirst,        // 'a' | 'b'
     innings: [],
@@ -764,7 +788,8 @@ function addExtra(type, runs) {
   // runs: total runs on the delivery (for wd/nb, the +runs ON TOP of the 1-run penalty; for b/lb, just the byes)
   let label = '';
   if (type === 'wd') {
-    const wideRuns = 1 + runs;
+    const widePenalty = match.widePenalty != null ? match.widePenalty : 1;
+    const wideRuns = widePenalty + runs;
     ing.extras.wides += wideRuns;
     ing.runs += wideRuns;
     ing.score += wideRuns;
@@ -774,30 +799,43 @@ function addExtra(type, runs) {
       const p = currentPair();
       p.runs += wideRuns;
     }
-    label = runs > 0 ? `${wideRuns}wd` : 'wd';
+    label = runs > 0 ? `${wideRuns}wd` : (widePenalty > 1 ? `${widePenalty}wd` : 'wd');
     if (runs % 2 === 1) swapStrike();
     ing.thisOver.push({ runs: wideRuns, type: 'extra', label });
     ing.balls.push({ batter: s.idx, bowler: b.idx, runs: wideRuns, type: 'wide', label });
-    // wide does NOT count as a ball — bowler bowls again
+    // If not re-bowled, count as a ball
+    if (match.wideRebowled === false) {
+      b.balls += 1;
+      b.ballsThisOver += 1;
+      ing.ballsBowled += 1;
+      if (match.format === 'pairs') currentPair().ballsBowled += 1;
+    }
   } else if (type === 'nb') {
-    const nbRuns = 1 + runs;
-    ing.extras.noBalls += 1;
+    const nbPenalty = match.noBallPenalty != null ? match.noBallPenalty : 1;
+    const nbRuns = nbPenalty + runs;
+    ing.extras.noBalls += nbPenalty;
     ing.runs += nbRuns;
     ing.score += nbRuns;
     b.runs += nbRuns;
     b.runsThisOver += nbRuns;
     s.balls += 1;     // striker faces a no-ball
-    s.runs += runs;   // runs off the bat (assumes 'nb' runs were off the bat)
+    s.runs += runs;   // runs off the bat
     if (match.format === 'pairs') {
       const p = currentPair();
       p.runs += nbRuns;
     }
-    label = runs > 0 ? `${nbRuns}nb` : 'nb';
+    label = runs > 0 ? `${nbRuns}nb` : (nbPenalty > 1 ? `${nbPenalty}nb` : 'nb');
     if (runs % 2 === 1) swapStrike();
     ing.thisOver.push({ runs: nbRuns, type: 'extra', label });
     ing.balls.push({ batter: s.idx, bowler: b.idx, runs: nbRuns, type: 'noball', label });
     ing.freeHit = true;
-    // no-ball does NOT count as a legal ball
+    // If not re-bowled, count as a ball
+    if (match.noBallRebowled === false) {
+      b.balls += 1;
+      b.ballsThisOver += 1;
+      ing.ballsBowled += 1;
+      if (match.format === 'pairs') currentPair().ballsBowled += 1;
+    }
   } else if (type === 'b') {
     ing.extras.byes += runs;
     ing.runs += runs;
@@ -1265,6 +1303,19 @@ function renderSetup() {
             <option value="b">Team B</option>
           </select>
         </label>
+        <div class="section-label" style="margin-top:14px; margin-bottom:4px;">Extras rules</div>
+        <div class="row">
+          <label><span>Wide penalty (runs)</span><input type="number" id="widePenalty" value="1" min="1" max="5"></label>
+          <label><span>No-ball penalty (runs)</span><input type="number" id="noBallPenalty" value="1" min="1" max="5"></label>
+        </div>
+        <label style="display:flex; align-items:center; gap:10px; margin-bottom:8px; font-weight:600;">
+          <input type="checkbox" id="wideRebowled" checked style="width:auto; margin:0;">
+          <span style="margin:0; text-transform:none; letter-spacing:0; font-size:0.95rem; color:var(--ink-soft); font-weight:500;">Wides are re-bowled (don't count as a ball)</span>
+        </label>
+        <label style="display:flex; align-items:center; gap:10px; margin-bottom:4px; font-weight:600;">
+          <input type="checkbox" id="noBallRebowled" checked style="width:auto; margin:0;">
+          <span style="margin:0; text-transform:none; letter-spacing:0; font-size:0.95rem; color:var(--ink-soft); font-weight:500;">No-balls are re-bowled (don't count as a ball)</span>
+        </label>
       </div>
       <button class="btn btn-primary btn-full" data-action="start-match">Start Match</button>
       <div style="height:40px;"></div>
@@ -1463,15 +1514,16 @@ function renderModal() {
   } else if (modal.type === 'extra-runs') {
     const t = modal.data.extraType;
     const labels = { wd: 'Wide', nb: 'No Ball', b: 'Bye', lb: 'Leg Bye' };
+    const penalty = t === 'wd' ? (match.widePenalty || 1) : (match.noBallPenalty || 1);
     const helpText = (t === 'wd' || t === 'nb')
-      ? 'Runs scored in addition to the 1-run penalty:'
+      ? `Runs run by batters (the ${penalty}-run penalty is added automatically):`
       : 'Number of byes:';
     return `<div class="modal-backdrop" data-action="close-modal-backdrop"><div class="modal">
-      <h2>${labels[t]}</h2>
+      <h2>${labels[t]}${(t === 'wd' || t === 'nb') ? ` <span style="color:var(--gold-deep); font-weight:600; font-size:0.85rem;">(+${penalty})</span>` : ''}</h2>
       <div class="muted" style="margin-bottom:10px;">${helpText}</div>
       <div class="modal-grid">
         ${[0, 1, 2, 3, 4].filter(n => !(t === 'b' || t === 'lb') || n > 0).map(n => `
-          <button class="btn btn-primary" data-action="confirm-extra" data-type="${t}" data-runs="${n}">+${n}</button>
+          <button class="btn btn-primary" data-action="confirm-extra" data-type="${t}" data-runs="${n}">+${n} run${n === 1 ? '' : 's'}</button>
         `).join('')}
       </div>
       <button class="btn btn-ghost btn-full" data-action="close-modal" style="margin-top:10px;">Cancel</button>
@@ -1540,12 +1592,34 @@ function renderModal() {
       <h2>Menu</h2>
       <div class="modal-list">
         <button class="btn btn-secondary" data-action="scorecard">View Scorecard</button>
+        <button class="btn btn-secondary" data-action="edit-names">Edit Player Names</button>
         <button class="btn btn-secondary" data-action="change-bowler">Change Bowler (mid-over)</button>
         <button class="btn btn-secondary" data-action="swap-batters">Swap Striker / Non-Striker</button>
         <button class="btn btn-secondary" data-action="end-innings-confirm">End Innings</button>
         <button class="btn btn-secondary" data-action="goto-home">Save &amp; Exit</button>
       </div>
       <button class="btn btn-ghost btn-full" data-action="close-modal" style="margin-top:10px;">Close</button>
+    `;
+  } else if (modal.type === 'edit-names') {
+    const renderTeamInputs = (team, label, roster) => `
+      <div style="margin-bottom:14px;">
+        <div class="section-label" style="margin-bottom:6px;">${escapeHtml(label)}</div>
+        <div style="display:flex; flex-direction:column; gap:6px;">
+          ${roster.map((name, i) => `
+            <input type="text" class="edit-name-input" data-team="${team}" data-idx="${i}" value="${escapeHtml(name)}" placeholder="Player ${i+1}">
+          `).join('')}
+        </div>
+      </div>
+    `;
+    body = `
+      <h2>Edit Player Names</h2>
+      <div class="muted" style="margin-bottom:12px; font-size:0.85rem;">Updates apply everywhere — scorecard, scoring view, and saved match.</div>
+      ${renderTeamInputs('a', match.teamA, match.playersA)}
+      ${renderTeamInputs('b', match.teamB, match.playersB)}
+      <div class="row" style="margin-top:14px;">
+        <button class="btn btn-ghost" data-action="close-modal">Cancel</button>
+        <button class="btn btn-primary" data-action="save-names">Save</button>
+      </div>
     `;
   }
   return `<div class="modal-backdrop" data-action="close-modal-backdrop"><div class="modal">${body}</div></div>`;
@@ -1766,6 +1840,10 @@ function handleAction(e) {
       oversTotal: parseInt(document.getElementById('oversTotal').value) || 20,
       totalInnings: parseInt(document.getElementById('totalInnings').value) || 2,
       battingFirst: document.getElementById('battingFirst').value,
+      widePenalty: parseInt(document.getElementById('widePenalty').value) || 1,
+      noBallPenalty: parseInt(document.getElementById('noBallPenalty').value) || 1,
+      wideRebowled: document.getElementById('wideRebowled').checked,
+      noBallRebowled: document.getElementById('noBallRebowled').checked,
       playersA: document.getElementById('playersA').value.split('\n').map(s => s.trim()).filter(Boolean),
       playersB: document.getElementById('playersB').value.split('\n').map(s => s.trim()).filter(Boolean),
     };
@@ -1839,6 +1917,28 @@ function handleAction(e) {
   if (action === 'end-innings-confirm') {
     if (!confirm('End this innings?')) return;
     snapshot(); endInnings(); upsertMatch(); closeModal(); render();
+    return;
+  }
+  if (action === 'edit-names') { modal = { type: 'edit-names' }; render(); return; }
+  if (action === 'save-names') {
+    snapshot();
+    document.querySelectorAll('.edit-name-input').forEach(input => {
+      const team = input.dataset.team;
+      const idx = parseInt(input.dataset.idx);
+      const newName = input.value.trim() || `Player ${idx+1}`;
+      const roster = team === 'a' ? match.playersA : match.playersB;
+      roster[idx] = newName;
+      match.innings.forEach(ing => {
+        if (ing.battingTeam === team) {
+          if (ing.batters[idx]) ing.batters[idx].name = newName;
+        } else {
+          if (ing.bowlers[idx]) ing.bowlers[idx].name = newName;
+        }
+      });
+    });
+    upsertMatch();
+    closeModal();
+    showToast('Player names updated');
     return;
   }
   if (action === 'close-modal') { closeModal(); return; }
