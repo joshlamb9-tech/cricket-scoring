@@ -9,7 +9,9 @@
 <meta name="theme-color" content="#1e3a5f">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-192.png">
-<link href="https://fonts.googleapis.com/css2?family=Dosis:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <script src="jspdf.umd.min.js"></script>
 <script src="jspdf.plugin.autotable.min.js"></script>
 <title>Cricket Scorer</title>
@@ -54,7 +56,7 @@
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body {
   margin: 0; padding: 0; height: 100%; overflow-x: hidden;
-  font-family: 'Dosis', sans-serif;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
   background: var(--bg);
   background-image:
     radial-gradient(circle at 0% 0%, rgba(201, 169, 97, 0.06) 0%, transparent 40%),
@@ -63,7 +65,14 @@ html, body {
   -webkit-user-select: none; user-select: none;
   font-size: 16px;
   font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1, 'cv11' 1;
   position: relative;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+.display-font {
+  font-family: 'Bebas Neue', 'Inter', sans-serif;
+  letter-spacing: 0;
 }
 body::before {
   content: '';
@@ -205,8 +214,12 @@ label > span { display: block; margin-bottom: 5px; font-size: 0.78rem; color: va
   pointer-events: none;
 }
 .home-hero h1 {
-  margin: 0; font-size: 1.7rem; font-weight: 800; letter-spacing: -0.3px;
-  display: flex; align-items: center; gap: 10px;
+  margin: 0;
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 2.4rem; font-weight: 400; letter-spacing: 2px;
+  line-height: 1;
+  display: flex; align-items: center; gap: 12px;
+  text-transform: uppercase;
 }
 .home-hero h1::before {
   content: ''; width: 24px; height: 24px; border-radius: 50%;
@@ -303,20 +316,23 @@ label > span { display: block; margin-bottom: 5px; font-size: 0.78rem; color: va
   50% { opacity: 0.5; transform: scale(0.7); }
 }
 .scoreboard .main-score {
-  font-size: 2.3rem; font-weight: 800;
-  letter-spacing: -1.2px; line-height: 1;
-  margin: 4px 0 2px 0;
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 3.2rem; font-weight: 400;
+  letter-spacing: 1px; line-height: 0.95;
+  margin: 6px 0 2px 0;
   display: flex; align-items: baseline; flex-wrap: wrap; gap: 0;
 }
 .scoreboard .main-score .runs { color: white; }
 .scoreboard .main-score .slash {
-  color: var(--gold-bright); font-weight: 500;
-  margin: 0 4px; opacity: 0.85;
+  color: var(--gold-bright); font-weight: 400;
+  margin: 0 6px; opacity: 0.9;
 }
 .scoreboard .main-score .wkts { color: white; }
 .scoreboard .main-score .ov {
-  font-size: 1.05rem; opacity: 0.78; font-weight: 500;
-  margin-left: 10px; letter-spacing: 0;
+  font-family: 'Inter', sans-serif;
+  font-size: 0.95rem; opacity: 0.78; font-weight: 500;
+  margin-left: 12px; letter-spacing: 0.3px;
+  align-self: center;
 }
 .scoreboard .target {
   font-size: 0.85rem; color: var(--gold-bright); margin-top: 3px;
@@ -531,9 +547,11 @@ label > span { display: block; margin-bottom: 5px; font-size: 0.78rem; color: va
   pointer-events: none;
 }
 .result-banner h2 {
-  margin: 0; color: var(--navy-deep); font-weight: 800;
-  font-size: 1.2rem; letter-spacing: 0.3px;
+  margin: 0; color: var(--navy-deep);
+  font-family: 'Bebas Neue', sans-serif;
+  font-weight: 400; font-size: 1.6rem; letter-spacing: 1.5px;
   text-shadow: 0 1px 0 rgba(255,255,255,0.3);
+  text-transform: uppercase;
 }
 .result-banner .label {
   font-size: 0.7rem; text-transform: uppercase; letter-spacing: 2px;
@@ -552,7 +570,10 @@ label > span { display: block; margin-bottom: 5px; font-size: 0.78rem; color: va
   border-bottom: 2px solid var(--gold);
 }
 .innings-header .team { font-size: 1rem; }
-.innings-header .innings-score { font-size: 1.05rem; font-weight: 800; }
+.innings-header .innings-score {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 1.35rem; font-weight: 400; letter-spacing: 0.5px;
+}
 
 .scorecard-table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
 .scorecard-table th, .scorecard-table td { padding: 7px 4px; text-align: left; border-bottom: 1px solid var(--line); }
