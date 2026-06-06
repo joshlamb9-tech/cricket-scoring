@@ -663,10 +663,11 @@ function createMatch(opts) {
   const now = new Date();
   const m = {
     id: 'match-' + now.getTime(),
-    format: opts.format,                    // 'standard' | 'pairs'
+    format: opts.format,                    // 'standard' | 'pairs' | 'hundred'
     teamA: opts.teamA || 'Home',
     teamB: opts.teamB || 'Away',
     oversTotal: opts.oversTotal || 20,
+    ballsTotal: opts.format === 'hundred' ? (opts.ballsTotal || 100) : null,
     wicketsToOut: opts.wicketsToOut || 10,
     totalInnings: opts.totalInnings || 2,   // 1 or 2
     playersA: opts.playersA || [],
@@ -748,6 +749,7 @@ function undo() {
   if (stateHistory.length === 0) { showToast('Nothing to undo'); return; }
   const prev = stateHistory.pop();
   match = JSON.parse(prev);
+  modal = null;   // a snapshot restore must clear any open prompt
   upsertMatch();
   render();
 }
@@ -947,8 +949,8 @@ function addWicket(howOut, batterOutPos, runsCompleted, crossed, fielderName) {
 
   ing.freeHit = false;
 
-  // Check if all out / end of innings (standard format)
-  if (match.format === 'standard' && ing.wickets >= match.wicketsToOut) {
+  // Check if all out / end of innings (standard + Hundred)
+  if ((match.format === 'standard' || match.format === 'hundred') && ing.wickets >= match.wicketsToOut) {
     endInnings();
     upsertMatch();
     render();
@@ -993,7 +995,7 @@ function postBall() {
   // Check end of over (6 legal balls)
   const ing = currentInnings();
   const b = bowler();
-  if (b && b.ballsThisOver === 6) endOver();
+  if (b && b.ballsThisOver === ballsPerOver()) endOver();
   // Check pairs cricket: end of pair's overs?
   if (match.format === 'pairs') {
     const p = currentPair();
@@ -1016,9 +1018,9 @@ function postBall() {
       }
     }
   }
-  // Check overs completed in standard
-  if (match.format === 'standard') {
-    if (Math.floor(ing.ballsBowled / 6) >= match.oversTotal && ing.ballsBowled % 6 === 0) {
+  // Check innings ball limit reached (standard overs or Hundred 100 balls)
+  if (match.format === 'standard' || match.format === 'hundred') {
+    if (ing.ballsBowled >= totalBalls()) {
       endInnings();
       upsertMatch();
       render();
@@ -1042,7 +1044,7 @@ function postBall() {
 function endOver() {
   const ing = currentInnings();
   const b = bowler();
-  if (b.runsThisOver === 0 && b.ballsThisOver === 6) b.maidens += 1;
+  if (b.runsThisOver === 0 && b.ballsThisOver === ballsPerOver()) b.maidens += 1;
   b.runsThisOver = 0;
   b.ballsThisOver = 0;
   ing.thisOver = [];
@@ -1076,7 +1078,7 @@ function determineResult() {
   if (match.totalInnings === 1) {
     const ing = match.innings[0];
     const team = ing.battingTeam === 'a' ? match.teamA : match.teamB;
-    match.result = `${team} scored ${ing.score}/${ing.wickets} in ${oversString(ing.ballsBowled)} overs`;
+    match.result = `${team} scored ${ing.score}/${ing.wickets} in ${oversString(ing.ballsBowled)} ${match.format === 'hundred' ? 'balls' : 'overs'}`;
     return;
   }
   const a = match.innings[0].score;
@@ -1085,18 +1087,28 @@ function determineResult() {
   const teamB = match.battingFirst === 'a' ? match.teamB : match.teamA;
   if (a > b) match.result = `${teamA} won by ${a - b} runs`;
   else if (b > a) {
-    const wktsLeft = match.format === 'standard' ? (match.wicketsToOut - match.innings[1].wickets) : '—';
-    match.result = `${teamB} won` + (match.format === 'standard' ? ` by ${wktsLeft} wickets` : '');
+    const wktsLeft = match.format !== 'pairs' ? (match.wicketsToOut - match.innings[1].wickets) : '—';
+    match.result = `${teamB} won` + (match.format !== 'pairs' ? ` by ${wktsLeft} wickets` : '');
   } else match.result = 'Match tied';
 }
 
 // =========================================================================
 // HELPERS
 // =========================================================================
+function ballsPerOver() { return match && match.format === 'hundred' ? 5 : 6; }
+function overUnit() { return match && match.format === 'hundred' ? 'balls' : 'ov'; }
+function totalBalls() {
+  if (match.format === 'hundred') return match.ballsTotal || 100;
+  if (match.format === 'pairs') return match.pairsConfig.pairCount * match.pairsConfig.oversPerPair * 6;
+  return match.oversTotal * 6;
+}
 function oversCompletedDisplay(balls) {
-  return { whole: Math.floor(balls / 6), part: balls % 6 };
+  const bpo = ballsPerOver();
+  return { whole: Math.floor(balls / bpo), part: balls % bpo };
 }
 function oversString(balls) {
+  // The Hundred counts in balls, not overs.
+  if (match && match.format === 'hundred') return `${balls}`;
   const d = oversCompletedDisplay(balls);
   return d.part === 0 ? `${d.whole}` : `${d.whole}.${d.part}`;
 }
@@ -1111,7 +1123,8 @@ function showToast(msg) {
 // =========================================================================
 function promptBowler(isReplacement) {
   const ing = currentInnings();
-  const available = ing.bowlers.filter(b => b.idx !== ing.previousBowler || isReplacement);
+  const noRestriction = isReplacement || match.format === 'hundred';
+  const available = ing.bowlers.filter(b => noRestriction || b.idx !== ing.previousBowler);
   modal = { type: 'select-bowler', data: { bowlers: available } };
   render();
 }
@@ -1242,6 +1255,8 @@ function renderMatchItem(m) {
   }).join(' &nbsp;·&nbsp; ');
   const fmtLabel = m.format === 'pairs'
     ? `Pairs · ${m.pairsConfig.pairCount}×${m.pairsConfig.oversPerPair} ov`
+    : m.format === 'hundred'
+    ? `The Hundred · ${m.ballsTotal || 100} balls`
     : `${m.oversTotal} ov`;
   return `
     <div class="match-item ${status}" data-action="open-match" data-id="${m.id}">
@@ -1273,6 +1288,7 @@ function renderSetup() {
           <span>Format</span>
           <select id="format">
             <option value="standard">Standard (Limited Overs)</option>
+            <option value="hundred">The Hundred (100 balls)</option>
             <option value="pairs">Pairs Cricket</option>
           </select>
         </label>
@@ -1287,10 +1303,19 @@ function renderSetup() {
           <label><span>Team A</span><input type="text" id="teamA" placeholder="Home" value="Mowden"></label>
           <label><span>Team B</span><input type="text" id="teamB" placeholder="Away"></label>
         </div>
-        <label>
-          <span>Overs per innings</span>
-          <input type="number" id="oversTotal" value="20" min="1" max="100">
-        </label>
+        <div id="overs-opts">
+          <label>
+            <span>Overs per innings</span>
+            <input type="number" id="oversTotal" value="20" min="1" max="100">
+          </label>
+        </div>
+        <div id="hundred-opts" style="display:none;">
+          <label>
+            <span>Balls per innings</span>
+            <input type="number" id="ballsTotal" value="100" min="5" max="200" step="5">
+          </label>
+          <div class="muted" style="margin:-6px 0 12px; font-size:0.82rem;">5-ball sets · strike rotates every 5 balls · count shown in balls.</div>
+        </div>
         <div id="standard-opts">
           <label>
             <span>Wickets to all out</span>
@@ -1361,7 +1386,7 @@ function renderScoring() {
     <main class="scoring-view">
       <div class="scoreboard">
         <div class="innings-label"><span class="live-dot"></span>${escapeHtml(inningsLabel)}</div>
-        <div class="main-score"><span class="runs">${ing.score}</span><span class="slash">/</span><span class="wkts">${ing.wickets}</span><span class="ov">${oversString(ing.ballsBowled)} ov</span></div>
+        <div class="main-score"><span class="runs">${ing.score}</span><span class="slash">/</span><span class="wkts">${ing.wickets}</span><span class="ov">${oversString(ing.ballsBowled)} ${overUnit()}</span></div>
         ${targetLine}
         ${pairLine}
       </div>
@@ -1424,12 +1449,10 @@ function renderTarget() {
   const target = matchTarget();
   const ing = currentInnings();
   const need = target - ing.score;
-  const ballsBowled = ing.ballsBowled;
-  const ballsTotal = match.oversTotal * 6;
-  const ballsLeft = ballsTotal - ballsBowled;
-  const oversLeft = oversString(ballsLeft);
+  const ballsLeft = totalBalls() - ing.ballsBowled;
   if (need <= 0) return `<div class="target">Target chased!</div>`;
-  return `<div class="target">Need ${need} from ${oversLeft} overs</div>`;
+  const fromStr = match.format === 'hundred' ? `${ballsLeft} balls` : `${oversString(ballsLeft)} overs`;
+  return `<div class="target">Need ${need} from ${fromStr}</div>`;
 }
 
 function renderPairInfo() {
@@ -1450,7 +1473,7 @@ function renderScorecard() {
       <div class="card">
         <div class="innings-header">
           <span class="team">${escapeHtml(team)}</span>
-          <span class="innings-score">${ing.score}/${ing.wickets} <span style="opacity:0.7; font-weight:500; font-size:0.85rem;">(${oversString(ing.ballsBowled)} ov)</span></span>
+          <span class="innings-score">${ing.score}/${ing.wickets} <span style="opacity:0.7; font-weight:500; font-size:0.85rem;">(${oversString(ing.ballsBowled)} ${overUnit()})</span></span>
         </div>
         <table class="scorecard-table">
           <thead><tr><th>Batter</th><th class="num">R</th><th class="num">B</th><th class="num">4s</th><th class="num">6s</th><th>How out</th></tr></thead>
@@ -1473,7 +1496,7 @@ function renderScorecard() {
         </div>
         <hr>
         <table class="scorecard-table">
-          <thead><tr><th>Bowler</th><th class="num">O</th><th class="num">M</th><th class="num">R</th><th class="num">W</th></tr></thead>
+          <thead><tr><th>Bowler</th><th class="num">${match.format === 'hundred' ? 'B' : 'O'}</th><th class="num">M</th><th class="num">R</th><th class="num">W</th></tr></thead>
           <tbody>
           ${ing.bowlers.filter(b => b.balls > 0).map(b => `
             <tr>
@@ -1516,7 +1539,7 @@ function renderModal() {
           </button>
         `).join('')}
       </div>
-      <div class="muted" style="margin-top:8px; font-size:0.85rem;">(Bowler cannot bowl consecutive overs — previous bowler hidden)</div>
+      ${match.format === 'hundred' ? '' : '<div class="muted" style="margin-top:8px; font-size:0.85rem;">(Bowler cannot bowl consecutive overs — previous bowler hidden)</div>'}
       <button class="btn btn-ghost btn-full" data-action="close-modal" style="margin-top:10px;">Cancel</button>
     `;
   } else if (modal.type === 'select-batter') {
@@ -1529,6 +1552,7 @@ function renderModal() {
           </button>
         `).join('')}
       </div>
+      <button class="btn btn-ghost btn-full" data-action="undo" style="margin-top:10px;">↶ Undo the wicket</button>
     `;
   } else if (modal.type === 'extra-runs') {
     const t = modal.data.extraType;
@@ -1562,7 +1586,10 @@ function renderModal() {
     body = `
       <h2>${escapeHtml(method)}</h2>
       <button class="btn btn-primary btn-full" data-action="finalise-wicket" data-method="${method}" data-position="striker" data-runs="0">Confirm ${escapeHtml(method)}</button>
-      <button class="btn btn-ghost btn-full" data-action="close-modal" style="margin-top:10px;">Cancel</button>
+      <div class="row" style="margin-top:10px;">
+        <button class="btn btn-secondary" data-action="wicket-back" data-step="method">← Back</button>
+        <button class="btn btn-ghost" data-action="close-modal">Cancel</button>
+      </div>
     `;
   } else if (modal.type === 'wicket-fielder') {
     const { fielders, bowlerIdx } = modal.data;
@@ -1576,7 +1603,10 @@ function renderModal() {
           </button>
         `).join('')}
       </div>
-      <button class="btn btn-ghost btn-full" data-action="close-modal" style="margin-top:10px;">Cancel</button>
+      <div class="row" style="margin-top:10px;">
+        <button class="btn btn-secondary" data-action="wicket-back" data-step="method">← Back</button>
+        <button class="btn btn-ghost" data-action="close-modal">Cancel</button>
+      </div>
     `;
   } else if (modal.type === 'wicket-run-out') {
     const d = modal.data;
@@ -1593,7 +1623,10 @@ function renderModal() {
         <button class="btn btn-primary" data-action="run-out-batter" data-position="striker">Striker</button>
         <button class="btn btn-primary" data-action="run-out-batter" data-position="non-striker">Non-striker</button>
       </div>
-      <button class="btn btn-ghost btn-full" data-action="close-modal" style="margin-top:10px;">Cancel</button>
+      <div class="row" style="margin-top:10px;">
+        <button class="btn btn-secondary" data-action="wicket-back" data-step="method">← Back</button>
+        <button class="btn btn-ghost" data-action="close-modal">Cancel</button>
+      </div>
     `;
   } else if (modal.type === 'wicket-crossed') {
     const d = modal.data;
@@ -1604,13 +1637,17 @@ function renderModal() {
         <button class="btn btn-primary" data-action="finalise-wicket-crossed" data-crossed="false">Didn't cross</button>
         <button class="btn btn-primary" data-action="finalise-wicket-crossed" data-crossed="true">Crossed</button>
       </div>
-      <button class="btn btn-ghost btn-full" data-action="close-modal" style="margin-top:10px;">Cancel</button>
+      <div class="row" style="margin-top:10px;">
+        <button class="btn btn-secondary" data-action="wicket-back" data-step="${d.method === 'Caught' ? 'fielder' : 'run-out'}">← Back</button>
+        <button class="btn btn-ghost" data-action="close-modal">Cancel</button>
+      </div>
     `;
   } else if (modal.type === 'menu') {
     body = `
       <h2>Menu</h2>
       <div class="modal-list">
         <button class="btn btn-secondary" data-action="scorecard">View Scorecard</button>
+        <button class="btn btn-secondary" data-action="edit-settings">Edit Match Settings / Rules</button>
         <button class="btn btn-secondary" data-action="edit-names">Edit Player Names</button>
         <button class="btn btn-secondary" data-action="change-bowler">Change Bowler (mid-over)</button>
         <button class="btn btn-secondary" data-action="swap-batters">Swap Striker / Non-Striker</button>
@@ -1638,6 +1675,54 @@ function renderModal() {
       <div class="row" style="margin-top:14px;">
         <button class="btn btn-ghost" data-action="close-modal">Cancel</button>
         <button class="btn btn-primary" data-action="save-names">Save</button>
+      </div>
+    `;
+  } else if (modal.type === 'edit-settings') {
+    const fmtName = match.format === 'pairs' ? 'Pairs Cricket' : match.format === 'hundred' ? 'The Hundred' : 'Standard (Limited Overs)';
+    let formatFields = '';
+    if (match.format === 'standard') {
+      formatFields = `
+        <div class="row">
+          <label><span>Overs per innings</span><input type="number" id="es-oversTotal" value="${match.oversTotal}" min="1" max="100"></label>
+          <label><span>Wickets to all out</span><input type="number" id="es-wickets" value="${match.wicketsToOut}" min="1" max="11"></label>
+        </div>`;
+    } else if (match.format === 'hundred') {
+      formatFields = `
+        <div class="row">
+          <label><span>Balls per innings</span><input type="number" id="es-ballsTotal" value="${match.ballsTotal || 100}" min="5" max="200" step="5"></label>
+          <label><span>Wickets to all out</span><input type="number" id="es-wickets" value="${match.wicketsToOut}" min="1" max="11"></label>
+        </div>`;
+    } else {
+      formatFields = `
+        <div class="row">
+          <label><span>Overs per pair</span><input type="number" id="es-oversPerPair" value="${match.pairsConfig.oversPerPair}" min="1" max="20"></label>
+          <label><span>Pair start score</span><input type="number" id="es-startScore" value="${match.pairsConfig.startScore}"></label>
+        </div>`;
+    }
+    body = `
+      <h2>Match Settings</h2>
+      <div class="muted" style="margin-bottom:12px; font-size:0.85rem;">Changes apply from here on. Format (<strong>${fmtName}</strong>) can't be changed mid-match.</div>
+      <div class="row">
+        <label><span>Team A</span><input type="text" id="es-teamA" value="${escapeHtml(match.teamA)}"></label>
+        <label><span>Team B</span><input type="text" id="es-teamB" value="${escapeHtml(match.teamB)}"></label>
+      </div>
+      ${formatFields}
+      <div class="section-label" style="margin-top:6px; margin-bottom:4px;">Extras rules</div>
+      <div class="row">
+        <label><span>Wide penalty</span><input type="number" id="es-widePenalty" value="${match.widePenalty != null ? match.widePenalty : 1}" min="1" max="5"></label>
+        <label><span>No-ball penalty</span><input type="number" id="es-noBallPenalty" value="${match.noBallPenalty != null ? match.noBallPenalty : 1}" min="1" max="5"></label>
+      </div>
+      <label style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
+        <input type="checkbox" id="es-wideRebowled" ${match.wideRebowled !== false ? 'checked' : ''} style="width:auto; margin:0;">
+        <span style="margin:0; text-transform:none; letter-spacing:0; font-size:0.95rem; color:var(--ink-soft); font-weight:500;">Wides are re-bowled</span>
+      </label>
+      <label style="display:flex; align-items:center; gap:10px; margin-bottom:4px;">
+        <input type="checkbox" id="es-noBallRebowled" ${match.noBallRebowled !== false ? 'checked' : ''} style="width:auto; margin:0;">
+        <span style="margin:0; text-transform:none; letter-spacing:0; font-size:0.95rem; color:var(--ink-soft); font-weight:500;">No-balls are re-bowled</span>
+      </label>
+      <div class="row" style="margin-top:14px;">
+        <button class="btn btn-ghost" data-action="close-modal">Cancel</button>
+        <button class="btn btn-primary" data-action="save-settings">Save</button>
       </div>
     `;
   }
@@ -1671,6 +1756,8 @@ function generatePDF() {
   const date = new Date(match.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
   const fmt = match.format === 'pairs'
     ? `Pairs cricket · ${match.pairsConfig.pairCount} pairs × ${match.pairsConfig.oversPerPair} overs`
+    : match.format === 'hundred'
+    ? `The Hundred · ${match.ballsTotal || 100} balls per innings`
     : `${match.oversTotal} overs per innings`;
   doc.text(`${date}  ·  ${fmt}`, margin, 54);
   y = 92;
@@ -1698,7 +1785,7 @@ function generatePDF() {
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(13);
     doc.setTextColor(30, 58, 95);
-    doc.text(`${team} — ${ing.score}/${ing.wickets} (${oversString(ing.ballsBowled)} overs)`, margin + 8, y + 14);
+    doc.text(`${team} — ${ing.score}/${ing.wickets} (${oversString(ing.ballsBowled)} ${match.format === 'hundred' ? 'balls' : 'overs'})`, margin + 8, y + 14);
     y += 32;
 
     // Batters
@@ -1732,7 +1819,7 @@ function generatePDF() {
     doc.setTextColor(80, 80, 80);
     doc.text(`Extras: ${totalEx}  (w ${ex.wides}, nb ${ex.noBalls}, b ${ex.byes}, lb ${ex.legByes})`, margin, y + 8);
     doc.setFont('helvetica', 'bold');
-    doc.text(`Total: ${ing.score}/${ing.wickets} in ${oversString(ing.ballsBowled)} overs`, pageWidth - margin, y + 8, { align: 'right' });
+    doc.text(`Total: ${ing.score}/${ing.wickets} in ${oversString(ing.ballsBowled)} ${match.format === 'hundred' ? 'balls' : 'overs'}`, pageWidth - margin, y + 8, { align: 'right' });
     y += 22;
 
     // Bowlers
@@ -1741,7 +1828,7 @@ function generatePDF() {
       if (y > pageHeight - 100) { doc.addPage(); y = margin; }
       doc.autoTable({
         startY: y,
-        head: [['Bowler', 'O', 'M', 'R', 'W']],
+        head: [['Bowler', match.format === 'hundred' ? 'B' : 'O', 'M', 'R', 'W']],
         body: bowlersBowled.map(b => [
           b.name,
           oversString(b.balls),
@@ -1831,8 +1918,11 @@ function attachEventHandlers() {
   if (view === 'setup') {
     const fmt = document.getElementById('format');
     if (fmt) fmt.addEventListener('change', () => {
-      document.getElementById('standard-opts').style.display = fmt.value === 'standard' ? '' : 'none';
-      document.getElementById('pairs-opts').style.display = fmt.value === 'pairs' ? '' : 'none';
+      const v = fmt.value;
+      document.getElementById('overs-opts').style.display = v === 'standard' ? '' : 'none';
+      document.getElementById('hundred-opts').style.display = v === 'hundred' ? '' : 'none';
+      document.getElementById('standard-opts').style.display = (v === 'standard' || v === 'hundred') ? '' : 'none';
+      document.getElementById('pairs-opts').style.display = v === 'pairs' ? '' : 'none';
     });
   }
 }
@@ -1866,8 +1956,9 @@ function handleAction(e) {
       playersA: document.getElementById('playersA').value.split('\n').map(s => s.trim()).filter(Boolean),
       playersB: document.getElementById('playersB').value.split('\n').map(s => s.trim()).filter(Boolean),
     };
-    if (fmt === 'standard') {
+    if (fmt === 'standard' || fmt === 'hundred') {
       opts.wicketsToOut = parseInt(document.getElementById('wicketsToOut').value) || 10;
+      if (fmt === 'hundred') opts.ballsTotal = parseInt(document.getElementById('ballsTotal').value) || 100;
       while (opts.playersA.length < opts.wicketsToOut + 1) opts.playersA.push(`Batter ${opts.playersA.length + 1}`);
       while (opts.playersB.length < opts.wicketsToOut + 1) opts.playersB.push(`Bowler ${opts.playersB.length + 1}`);
     } else {
@@ -1889,6 +1980,13 @@ function handleAction(e) {
   if (action === 'confirm-extra') { closeModal(); addExtra(el.dataset.type, parseInt(el.dataset.runs)); return; }
   if (action === 'wicket') { promptWicket(); return; }
   if (action === 'wicket-method') { pickWicketMethod(el.dataset.method); return; }
+  if (action === 'wicket-back') {
+    const step = el.dataset.step;
+    if (step === 'fielder') pickWicketMethod('Caught');
+    else if (step === 'run-out') pickWicketMethod('Run out');
+    else promptWicket();
+    return;
+  }
   if (action === 'pick-fielder') { pickFielder(el.dataset.name); return; }
   if (action === 'run-out-runs') {
     modal.data.runsCompleted = parseInt(el.dataset.runs);
@@ -1938,6 +2036,33 @@ function handleAction(e) {
     snapshot(); endInnings(); upsertMatch(); closeModal(); render();
     return;
   }
+  if (action === 'edit-settings') { modal = { type: 'edit-settings' }; render(); return; }
+  if (action === 'save-settings') {
+    snapshot();
+    const teamA = (document.getElementById('es-teamA').value || '').trim();
+    const teamB = (document.getElementById('es-teamB').value || '').trim();
+    if (teamA) match.teamA = teamA;
+    if (teamB) match.teamB = teamB;
+    const num = (id, fallback) => { const el = document.getElementById(id); const v = el ? parseInt(el.value) : NaN; return isNaN(v) ? fallback : v; };
+    if (match.format === 'standard') {
+      match.oversTotal = Math.max(1, num('es-oversTotal', match.oversTotal));
+      match.wicketsToOut = Math.max(1, num('es-wickets', match.wicketsToOut));
+    } else if (match.format === 'hundred') {
+      match.ballsTotal = Math.max(5, num('es-ballsTotal', match.ballsTotal || 100));
+      match.wicketsToOut = Math.max(1, num('es-wickets', match.wicketsToOut));
+    } else {
+      match.pairsConfig.oversPerPair = Math.max(1, num('es-oversPerPair', match.pairsConfig.oversPerPair));
+      match.pairsConfig.startScore = num('es-startScore', match.pairsConfig.startScore);
+    }
+    match.widePenalty = Math.max(1, num('es-widePenalty', match.widePenalty || 1));
+    match.noBallPenalty = Math.max(1, num('es-noBallPenalty', match.noBallPenalty || 1));
+    match.wideRebowled = document.getElementById('es-wideRebowled').checked;
+    match.noBallRebowled = document.getElementById('es-noBallRebowled').checked;
+    upsertMatch();
+    closeModal();
+    showToast('Match settings updated');
+    return;
+  }
   if (action === 'edit-names') { modal = { type: 'edit-names' }; render(); return; }
   if (action === 'save-names') {
     snapshot();
@@ -1962,6 +2087,8 @@ function handleAction(e) {
   }
   if (action === 'close-modal') { closeModal(); return; }
   if (action === 'close-modal-backdrop') {
+    // Don't let a stray backdrop tap strand a forced decision (new batter after a wicket)
+    if (modal && modal.type === 'select-batter') return;
     if (e.target === el) closeModal();
     return;
   }
