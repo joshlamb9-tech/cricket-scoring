@@ -204,8 +204,9 @@ function render(s, updatedAt) {
 function setLive(updatedAt) {
   const live = document.getElementById("live"), txt = document.getElementById("livetxt");
   if (!updatedAt) { live.classList.add("stale"); txt.textContent = "Offline"; return; }
+  // Updates land once per over (minutes apart), so only flag "paused" after a long gap.
   const age = Math.max(0, (Date.now() - new Date(updatedAt).getTime()) / 1000);
-  if (age < 90) { live.classList.remove("stale"); txt.textContent = "Live"; }
+  if (age < 900) { live.classList.remove("stale"); txt.textContent = "Live"; }
   else { live.classList.add("stale"); txt.textContent = "Paused"; }
 }
 
