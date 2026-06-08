@@ -696,8 +696,11 @@ function loadAll() {
         if (m.noBallPenalty == null) m.noBallPenalty = 1;
         if (m.wideRebowled == null) m.wideRebowled = true;
         if (m.noBallRebowled == null) m.noBallRebowled = true;
-        // Matches saved before opener selection existed already have their openers set
-        (m.innings || []).forEach(ing => { if (ing.openersSet == null) ing.openersSet = true; });
+        // Matches saved before opener/pair selection existed are already set up
+        (m.innings || []).forEach(ing => {
+          if (ing.openersSet == null) ing.openersSet = true;
+          if (ing.pairsSet == null) ing.pairsSet = true;
+        });
       });
     }
   } catch (e) { console.error('Load failed', e); matches = []; }
@@ -761,7 +764,8 @@ function createInnings(m, battingTeam) {
     extras: { wides: 0, noBalls: 0, byes: 0, legByes: 0, penalty: 0 },
     striker: 0,
     nonStriker: 1,
-    openersSet: m.format === 'pairs',   // pairs are fixed; standard/Hundred prompt for openers
+    openersSet: m.format === 'pairs',   // standard/Hundred prompt for openers; pairs use the pair builder
+    pairsSet: m.format !== 'pairs',     // pairs prompt to compose pairs + starting order
     batters: players.map((name, idx) => ({
       idx, name: name || `Batter ${idx+1}`,
       runs: 0, balls: 0, fours: 0, sixes: 0,
@@ -1259,11 +1263,15 @@ function closeModal() { modal = null; render(); }
 // RENDER
 // =========================================================================
 function render() {
-  // Fresh standard/Hundred innings — ask who's opening before scoring starts.
+  // Fresh innings — set up openers (standard/Hundred) or compose pairs (Pairs) first.
   if (view === 'scoring' && match && !modal) {
     const ing = currentInnings();
-    if (ing && !ing.openersSet && ing.ballsBowled === 0) {
-      modal = { type: 'select-openers', data: { phase: 'striker', strikerIdx: null } };
+    if (ing && ing.ballsBowled === 0) {
+      if (match.format === 'pairs' && !ing.pairsSet) {
+        modal = { type: 'setup-pairs', data: { built: [], current: [] } };
+      } else if (!ing.openersSet) {
+        modal = { type: 'select-openers', data: { phase: 'striker', strikerIdx: null } };
+      }
     }
   }
   const app = document.getElementById('app');
@@ -1606,6 +1614,25 @@ function renderModal() {
       </div>
       ${match.format === 'hundred' ? '' : '<div class="muted" style="margin-top:8px; font-size:0.85rem;">(Bowler cannot bowl consecutive overs — previous bowler hidden)</div>'}
       <button class="btn btn-ghost btn-full" data-action="close-modal" style="margin-top:10px;">Cancel</button>
+    `;
+  } else if (modal.type === 'setup-pairs') {
+    const ing = currentInnings();
+    const teamName = ing.battingTeam === 'a' ? match.teamA : match.teamB;
+    const total = match.pairsConfig.pairCount;
+    const assigned = new Set([...modal.data.built.flat(), ...modal.data.current]);
+    const remaining = ing.batters.filter(b => !assigned.has(b.idx));
+    const pairNo = modal.data.built.length + 1;
+    const slot = modal.data.current.length === 0 ? 'first' : 'second';
+    const builtSummary = modal.data.built.length
+      ? `<div class="muted" style="margin-bottom:10px; font-size:0.8rem;">${modal.data.built.map((p, i) => `<strong>Pair ${i+1}${i===0 ? ' (start)' : ''}:</strong> ${escapeHtml(ing.batters[p[0]].name)} &amp; ${escapeHtml(ing.batters[p[1]].name)}`).join('<br>')}</div>`
+      : '';
+    body = `
+      <h2>${escapeHtml(teamName)} — Pair ${pairNo} of ${total}${pairNo === 1 ? ' (starts)' : ''}</h2>
+      <div class="muted" style="margin-bottom:10px; font-size:0.88rem;">Tap the ${slot} batter${pairNo === 1 && modal.data.current.length === 0 ? ' (the one on strike)' : ''} of pair ${pairNo}.${modal.data.current.length === 1 ? ` <span style="color:var(--gold-deep); font-weight:600;">· paired with ${escapeHtml(ing.batters[modal.data.current[0]].name)}</span>` : ''}</div>
+      ${builtSummary}
+      <div class="modal-list">
+        ${remaining.map(b => `<button class="btn btn-secondary" data-action="pick-pair-member" data-idx="${b.idx}">${escapeHtml(b.name)}</button>`).join('')}
+      </div>
     `;
   } else if (modal.type === 'select-openers') {
     const ing = currentInnings();
@@ -2104,6 +2131,31 @@ function handleAction(e) {
   if (action === 'export-pdf') { generatePDF(); return; }
   if (action === 'select-bowler') { promptBowler(false); return; }
   if (action === 'pick-bowler') { pickBowler(parseInt(el.dataset.idx)); upsertMatch(); render(); return; }
+  if (action === 'pick-pair-member') {
+    const idx = parseInt(el.dataset.idx);
+    const ing = currentInnings();
+    modal.data.current.push(idx);
+    if (modal.data.current.length === 2) {
+      modal.data.built.push(modal.data.current);
+      modal.data.current = [];
+    }
+    if (modal.data.built.length === match.pairsConfig.pairCount) {
+      // Apply the composed pairs (Pair 1 starts)
+      ing.batters.forEach(b => { b.in = false; });
+      modal.data.built.forEach((pair, i) => { ing.pairs[i].batters = pair; });
+      ing.currentPair = 0;
+      ing.striker = ing.pairs[0].batters[0];
+      ing.nonStriker = ing.pairs[0].batters[1];
+      ing.batters[ing.striker].in = true;
+      ing.batters[ing.nonStriker].in = true;
+      ing.pairsSet = true;
+      upsertMatch();
+      closeModal();
+    } else {
+      render();
+    }
+    return;
+  }
   if (action === 'pick-opener') {
     const idx = parseInt(el.dataset.idx);
     const ing = currentInnings();
@@ -2191,7 +2243,7 @@ function handleAction(e) {
   if (action === 'close-modal') { closeModal(); return; }
   if (action === 'close-modal-backdrop') {
     // Don't let a stray backdrop tap strand a forced decision (new batter after a wicket)
-    if (modal && (modal.type === 'select-batter' || modal.type === 'select-openers')) return;
+    if (modal && (modal.type === 'select-batter' || modal.type === 'select-openers' || modal.type === 'setup-pairs')) return;
     if (e.target === el) closeModal();
     return;
   }
