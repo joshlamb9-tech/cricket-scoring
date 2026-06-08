@@ -169,8 +169,10 @@ function render(s, updatedAt) {
   if (!built) buildLayout();
 
   document.getElementById("batting").textContent = s.batting.toUpperCase() + " · " + s.inningsLabel;
-  setFlaps(document.getElementById("score"), s.score + "/" + s.wickets, 6, "big");
-  setFlaps(document.getElementById("overs"), s.overs, 4, "ovs");
+  const scoreTxt = s.score + "/" + s.wickets;
+  const oversTxt = String(s.overs);
+  setFlaps(document.getElementById("score"), scoreTxt, scoreTxt.length, "big");
+  setFlaps(document.getElementById("overs"), oversTxt, oversTxt.length, "ovs");
 
   document.getElementById("stk").innerHTML = esc(s.striker) + ' <span class="star">•</span>';
   document.getElementById("stkf").textContent = s.strikerRuns + " (" + s.strikerBalls + ")";
