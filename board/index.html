@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0b1322">
+<title>Cricket — Live Scoreboard</title>
+<style>
+  :root {
+    --navy:#16233a; --navy-deep:#0b1322; --gold:#e0bd6e; --gold-bright:#f0d27a;
+    --ink:#f3ead2; --seam:#070d18; --muted:#8694ab;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent; }
+  html,body { background:var(--navy-deep); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    min-height:100%; }
+  body { padding:18px 16px 40px; max-width:520px; margin:0 auto; }
+
+  .masthead { display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; }
+  .teams { font-size:15px; font-weight:800; letter-spacing:0.06em; text-transform:uppercase; color:var(--gold); }
+  .live { display:flex; align-items:center; gap:6px; font-size:11px; font-weight:700; letter-spacing:0.08em;
+    text-transform:uppercase; color:var(--muted); }
+  .dot { width:8px; height:8px; border-radius:50%; background:#3ad07a; box-shadow:0 0 8px #3ad07a; }
+  .live.stale .dot { background:#b9472f; box-shadow:none; }
+
+  .panel { background:linear-gradient(180deg,#1a2a44,#101b2e); border-radius:18px; padding:18px 16px;
+    box-shadow:0 8px 30px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.05); }
+  .batting { font-size:12px; font-weight:700; letter-spacing:0.1em; text-transform:uppercase;
+    color:var(--gold); margin-bottom:12px; }
+
+  .scoreline { display:flex; align-items:center; gap:14px; }
+  .ov-wrap { margin-top:14px; display:flex; align-items:baseline; gap:10px; }
+  .ov-label { font-size:11px; font-weight:700; letter-spacing:0.14em; text-transform:uppercase; color:var(--muted); }
+
+  /* ---- split-flap ---- */
+  .flaps { display:flex; gap:5px; }
+  .flap { position:relative; border-radius:7px; background:var(--navy);
+    width:var(--fw); height:var(--fh); perspective:300px;
+    box-shadow:0 2px 5px rgba(0,0,0,0.45); }
+  .flap .half { position:absolute; left:0; width:100%; height:50%; overflow:hidden;
+    background:var(--navy); display:block; }
+  .flap .top { top:0; border-radius:7px 7px 0 0; }
+  .flap .bottom { bottom:0; border-radius:0 0 7px 7px; background:#13203550; }
+  .flap .half span { position:absolute; left:0; width:100%; text-align:center;
+    height:var(--fh); line-height:var(--fh); font-size:var(--ffs); font-weight:800; color:var(--ink);
+    font-variant-numeric:tabular-nums; }
+  .flap .top span { top:0; }
+  .flap .bottom span { bottom:0; }
+  .flap::after { content:""; position:absolute; top:calc(50% - 1px); left:0; width:100%; height:2px;
+    background:var(--seam); z-index:6; }
+  /* flipping leaves */
+  .flap .leaf { position:absolute; left:0; width:100%; height:50%; overflow:hidden; z-index:5;
+    backface-visibility:hidden; }
+  .flap .leaf.lt { top:0; border-radius:7px 7px 0 0; transform-origin:50% 100%; background:var(--navy); }
+  .flap .leaf.lb { bottom:0; border-radius:0 0 7px 7px; transform-origin:50% 0%; background:#132035; }
+  .flap .leaf span { position:absolute; left:0; width:100%; text-align:center;
+    height:var(--fh); line-height:var(--fh); font-size:var(--ffs); font-weight:800; color:var(--ink);
+    font-variant-numeric:tabular-nums; }
+  .flap .leaf.lt span { top:0; }
+  .flap .leaf.lb span { bottom:0; }
+  @keyframes fallTop { from { transform:rotateX(0deg); } to { transform:rotateX(-90deg); } }
+  @keyframes fallBottom { from { transform:rotateX(90deg); } to { transform:rotateX(0deg); } }
+
+  /* big score sizing */
+  .big { --fw:46px; --fh:66px; --ffs:52px; }
+  .ovs { --fw:26px; --fh:38px; --ffs:30px; }
+
+  .rows { margin-top:18px; display:flex; flex-direction:column; gap:9px; }
+  .row { display:flex; align-items:center; background:rgba(255,255,255,0.035); border-radius:10px;
+    padding:11px 13px; }
+  .row .lbl { font-size:10px; font-weight:800; letter-spacing:0.1em; text-transform:uppercase;
+    color:var(--muted); width:64px; flex:none; }
+  .row .nm { font-size:17px; font-weight:700; flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .row .nm .star { color:var(--gold-bright); }
+  .row .fig { font-size:16px; font-weight:800; font-variant-numeric:tabular-nums; color:var(--ink); }
+
+  .overpips { margin-top:14px; display:flex; align-items:center; gap:7px; flex-wrap:wrap; }
+  .overpips .ol { font-size:10px; font-weight:800; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); }
+  .pip { width:26px; height:26px; border-radius:50%; display:flex; align-items:center; justify-content:center;
+    font-size:12px; font-weight:800; color:var(--navy-deep); background:rgba(255,255,255,0.85); }
+  .pip.w { background:#cf3a2a; color:#fff; } .pip.boundary { background:var(--gold); }
+
+  .status { margin-top:16px; text-align:center; font-size:16px; font-weight:700; color:var(--gold-bright);
+    min-height:22px; }
+  .result { margin-top:16px; text-align:center; background:var(--gold); color:var(--navy-deep);
+    font-weight:800; font-size:17px; padding:12px; border-radius:12px; }
+  .foot { margin-top:22px; text-align:center; font-size:11px; color:var(--muted); letter-spacing:0.04em; }
+  .waiting { text-align:center; color:var(--muted); margin-top:80px; font-size:15px; }
+</style>
+</head>
+<body>
+  <div id="app">
+    <div class="masthead">
+      <div class="teams" id="teams">Cricket</div>
+      <div class="live stale" id="live"><span class="dot"></span><span id="livetxt">Connecting</span></div>
+    </div>
+    <div id="content"><div class="waiting" id="waiting">Waiting for the match to start…</div></div>
+  </div>
+
+<script>
+const SUPABASE = "https://dlcseuejvducbsjhqvze.supabase.co";
+const ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRsY3NldWVqdmR1Y2JzamhxdnplIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI1MzY3NTUsImV4cCI6MjA4ODExMjc1NX0.MPkeXx_3cgm99RabE4W97jhFtB1ZXycUsR0ofCnNEPs";
+const matchId = new URLSearchParams(location.search).get("m");
+
+// ---------- split-flap ----------
+function ensureFlaps(container, len, sizeClass) {
+  if (container.dataset.len == len && container.classList.contains(sizeClass)) return;
+  container.className = "flaps " + sizeClass;
+  container.dataset.len = len;
+  container.innerHTML = "";
+  for (let i = 0; i < len; i++) {
+    const f = document.createElement("div");
+    f.className = "flap";
+    f.innerHTML = '<div class="half top"><span></span></div><div class="half bottom"><span></span></div>';
+    f.dataset.ch = " ";
+    container.appendChild(f);
+  }
+}
+function setFlap(flap, ch) {
+  const old = flap.dataset.ch;
+  if (old === ch) return;
+  flap.dataset.ch = ch;
+  const top = flap.querySelector(".top span");
+  const bottom = flap.querySelector(".bottom span");
+  // build flip leaves
+  const lt = document.createElement("div"); lt.className = "leaf lt";
+  lt.innerHTML = '<span>' + old + '</span>';
+  const lb = document.createElement("div"); lb.className = "leaf lb";
+  lb.innerHTML = '<span>' + ch + '</span>';
+  top.textContent = ch;                 // new char revealed behind falling top leaf
+  flap.appendChild(lt); flap.appendChild(lb);
+  lt.style.animation = "fallTop 0.13s ease-in forwards";
+  lb.style.animation = "fallBottom 0.13s ease-out 0.13s forwards";
+  lt.addEventListener("animationend", () => lt.remove());
+  lb.addEventListener("animationend", () => { bottom.textContent = ch; lb.remove(); });
+}
+function setFlaps(container, text, len, sizeClass) {
+  ensureFlaps(container, len, sizeClass);
+  const flaps = container.children;
+  const padded = String(text).padStart(len, " ").slice(-len);
+  for (let i = 0; i < len; i++) setFlap(flaps[i], padded[i]);
+}
+
+// ---------- render ----------
+let built = false;
+function buildLayout() {
+  document.getElementById("content").innerHTML = `
+    <div class="panel">
+      <div class="batting" id="batting"></div>
+      <div class="scoreline"><div class="flaps big" id="score"></div></div>
+      <div class="ov-wrap"><span class="ov-label">Overs</span><div class="flaps ovs" id="overs"></div></div>
+      <div class="overpips" id="overpips"></div>
+    </div>
+    <div class="rows">
+      <div class="row"><span class="lbl">Striker</span><span class="nm" id="stk"></span><span class="fig" id="stkf"></span></div>
+      <div class="row"><span class="lbl">Non-str</span><span class="nm" id="nst"></span><span class="fig" id="nstf"></span></div>
+      <div class="row"><span class="lbl">Bowler</span><span class="nm" id="bwl"></span><span class="fig" id="bwlf"></span></div>
+    </div>
+    <div class="status" id="status"></div>
+    <div id="resultwrap"></div>
+    <div class="foot">Live from Cricket Scorer · updates each over</div>`;
+  built = true;
+}
+function esc(s){ return (s||"").replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+function render(s, updatedAt) {
+  document.getElementById("teams").textContent = (s.teamA + " v " + s.teamB).toUpperCase();
+  if (!built) buildLayout();
+
+  document.getElementById("batting").textContent = s.batting.toUpperCase() + " · " + s.inningsLabel;
+  setFlaps(document.getElementById("score"), s.score + "/" + s.wickets, 6, "big");
+  setFlaps(document.getElementById("overs"), s.overs, 4, "ovs");
+
+  document.getElementById("stk").innerHTML = esc(s.striker) + ' <span class="star">•</span>';
+  document.getElementById("stkf").textContent = s.strikerRuns + " (" + s.strikerBalls + ")";
+  document.getElementById("nst").textContent = s.nonStriker;
+  document.getElementById("nstf").textContent = s.nonStrikerRuns + " (" + s.nonStrikerBalls + ")";
+  document.getElementById("bwl").textContent = s.bowler;
+  document.getElementById("bwlf").textContent = s.bowlerWkts + "-" + s.bowlerRuns + " (" + s.bowlerOvers + ")";
+
+  const op = document.getElementById("overpips");
+  if (s.lastOver && s.lastOver.length) {
+    op.innerHTML = '<span class="ol">Last over</span>' + s.lastOver.map(p => {
+      let cls = "pip", t = p;
+      if (p === "W") cls += " w";
+      else if (p === "4" || p === "6") cls += " boundary";
+      else if (p === "0") t = "•";
+      return '<span class="' + cls + '">' + esc(t) + '</span>';
+    }).join("");
+  } else op.innerHTML = "";
+
+  const status = document.getElementById("status");
+  if (s.need != null && s.ballsLeft != null && !s.result) {
+    status.textContent = s.need > 0 ? `Need ${s.need} from ${s.ballsLeft} balls` : "Target reached";
+  } else status.textContent = "";
+
+  const rw = document.getElementById("resultwrap");
+  rw.innerHTML = s.result ? '<div class="result">' + esc(s.result) + '</div>' : "";
+}
+
+function setLive(updatedAt) {
+  const live = document.getElementById("live"), txt = document.getElementById("livetxt");
+  if (!updatedAt) { live.classList.add("stale"); txt.textContent = "Offline"; return; }
+  const age = Math.max(0, (Date.now() - new Date(updatedAt).getTime()) / 1000);
+  if (age < 90) { live.classList.remove("stale"); txt.textContent = "Live"; }
+  else { live.classList.add("stale"); txt.textContent = "Paused"; }
+}
+
+async function poll() {
+  if (!matchId) { document.getElementById("waiting").textContent = "No match specified."; return; }
+  try {
+    const r = await fetch(`${SUPABASE}/rest/v1/live_matches?id=eq.${encodeURIComponent(matchId)}&select=state,updated_at`,
+      { headers: { apikey: ANON, Authorization: "Bearer " + ANON } });
+    const rows = await r.json();
+    if (rows && rows[0]) { render(rows[0].state, rows[0].updated_at); setLive(rows[0].updated_at); }
+    else { document.getElementById("livetxt").textContent = "Waiting"; }
+  } catch (e) {
+    document.getElementById("live").classList.add("stale");
+    document.getElementById("livetxt").textContent = "Offline";
+  }
+}
+poll();
+setInterval(poll, 4000);
+</script>
+</body>
+</html>
