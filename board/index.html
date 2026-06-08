@@ -87,6 +87,24 @@
     font-weight:800; font-size:17px; padding:12px; border-radius:12px; }
   .foot { margin-top:22px; text-align:center; font-size:11px; color:var(--muted); letter-spacing:0.04em; }
   .waiting { text-align:center; color:var(--muted); margin-top:80px; font-size:15px; }
+
+  /* picker */
+  .pickhead { font-size:12px; font-weight:700; letter-spacing:0.1em; text-transform:uppercase;
+    color:var(--gold); margin:4px 2px 12px; }
+  .pickrow { display:flex; align-items:center; justify-content:space-between; text-decoration:none;
+    color:var(--ink); background:linear-gradient(180deg,#1a2a44,#101b2e); border-radius:14px;
+    padding:15px 16px; margin-bottom:11px; box-shadow:0 4px 14px rgba(0,0,0,0.3); }
+  .pickrow:active { transform:scale(0.99); }
+  .pteams { font-size:18px; font-weight:800; }
+  .psub { font-size:13px; color:var(--muted); margin-top:3px; }
+  .pmeta { display:flex; align-items:center; gap:10px; flex:none; }
+  .plive { font-size:10px; font-weight:800; letter-spacing:0.06em; color:var(--navy-deep);
+    background:var(--gold-bright); padding:3px 8px; border-radius:20px; }
+  .pago { font-size:12px; color:var(--muted); }
+  .pchev { color:var(--muted); font-size:20px; }
+  .backlink { display:inline-block; color:var(--muted); text-decoration:none; font-size:13px;
+    font-weight:600; margin-bottom:12px; }
+  .backlink:active { color:var(--gold); }
 </style>
 </head>
 <body>
@@ -146,6 +164,7 @@ function setFlaps(container, text, len, sizeClass) {
 let built = false;
 function buildLayout() {
   document.getElementById("content").innerHTML = `
+    <a class="backlink" href="./">‹ All matches</a>
     <div class="panel">
       <div class="batting" id="batting"></div>
       <div class="scoreline"><div class="flaps big" id="score"></div></div>
@@ -223,8 +242,51 @@ async function poll() {
     document.getElementById("livetxt").textContent = "Offline";
   }
 }
-poll();
-setInterval(poll, 4000);
+// ---------- picker (no ?m= → list of matches) ----------
+function relTime(ts) {
+  const s = Math.max(0, (Date.now() - new Date(ts).getTime()) / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return Math.floor(s / 60) + " min ago";
+  if (s < 86400) return Math.floor(s / 3600) + "h ago";
+  return Math.floor(s / 86400) + "d ago";
+}
+function renderPicker(rows) {
+  const content = document.getElementById("content");
+  if (!rows.length) { content.innerHTML = '<div class="waiting">No matches yet. Check back when play starts.</div>'; return; }
+  const html = rows.map(r => {
+    const s = r.state || {};
+    const live = (Date.now() - new Date(r.updated_at).getTime()) / 1000 < 900 && !s.result;
+    const sub = s.result ? esc(s.result)
+      : (s.score != null ? `${s.score}/${s.wickets} · ${esc(String(s.overs))} ${esc(s.unit || "ov")}` : "—");
+    const meta = live ? '<span class="plive">LIVE</span>'
+      : '<span class="pago">' + relTime(r.updated_at) + "</span>";
+    return `<a class="pickrow" href="?m=${encodeURIComponent(r.id)}">
+      <div class="pinfo"><div class="pteams">${esc((s.teamA || "?") + " v " + (s.teamB || "?"))}</div>
+      <div class="psub">${sub}</div></div>
+      <div class="pmeta">${meta}<span class="pchev">›</span></div></a>`;
+  }).join("");
+  content.innerHTML = '<div class="pickhead">Choose a match</div>' + html;
+}
+async function pollPicker() {
+  try {
+    const r = await fetch(`${SUPABASE}/rest/v1/live_matches?select=id,state,updated_at&order=updated_at.desc&limit=40`,
+      { headers: { apikey: ANON, Authorization: "Bearer " + ANON } });
+    renderPicker((await r.json()) || []);
+  } catch (e) {
+    document.getElementById("content").innerHTML = '<div class="waiting">Couldn’t load matches. Check your connection.</div>';
+  }
+}
+
+// ---------- router ----------
+if (matchId) {
+  poll();
+  setInterval(poll, 4000);
+} else {
+  document.getElementById("live").style.display = "none";
+  document.getElementById("teams").textContent = "LIVE CRICKET";
+  pollPicker();
+  setInterval(pollPicker, 10000);
+}
 </script>
 </body>
 </html>
