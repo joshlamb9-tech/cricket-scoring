@@ -105,6 +105,9 @@
   .backlink { display:inline-block; color:var(--muted); text-decoration:none; font-size:13px;
     font-weight:600; margin-bottom:12px; }
   .backlink:active { color:var(--gold); }
+  .archlink { display:block; text-align:center; color:var(--gold); text-decoration:none;
+    font-weight:700; font-size:14px; margin-top:20px; padding:12px; }
+  .archlink:active { color:var(--gold-bright); }
 </style>
 </head>
 <body>
@@ -250,28 +253,58 @@ function relTime(ts) {
   if (s < 86400) return Math.floor(s / 3600) + "h ago";
   return Math.floor(s / 86400) + "d ago";
 }
-function renderPicker(rows) {
+let allRows = [];
+let showArchive = false;
+
+function isToday(ts) {
+  const d = new Date(ts), n = new Date();
+  return d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
+}
+function dayLabel(ts) {
+  return new Date(ts).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+}
+function matchRowHTML(r, withDate) {
+  const s = r.state || {};
+  const live = (Date.now() - new Date(r.updated_at).getTime()) / 1000 < 900 && !s.result;
+  const sub = s.result ? esc(s.result)
+    : (s.score != null ? `${s.score}/${s.wickets} · ${esc(String(s.overs))} ${esc(s.unit || "ov")}` : "—");
+  const meta = live ? '<span class="plive">LIVE</span>'
+    : '<span class="pago">' + (withDate ? dayLabel(r.updated_at) : relTime(r.updated_at)) + "</span>";
+  return `<a class="pickrow" href="?m=${encodeURIComponent(r.id)}">
+    <div class="pinfo"><div class="pteams">${esc((s.teamA || "?") + " v " + (s.teamB || "?"))}</div>
+    <div class="psub">${sub}</div></div>
+    <div class="pmeta">${meta}<span class="pchev">›</span></div></a>`;
+}
+function renderPicker() {
   const content = document.getElementById("content");
-  if (!rows.length) { content.innerHTML = '<div class="waiting">No matches yet. Check back when play starts.</div>'; return; }
-  const html = rows.map(r => {
-    const s = r.state || {};
-    const live = (Date.now() - new Date(r.updated_at).getTime()) / 1000 < 900 && !s.result;
-    const sub = s.result ? esc(s.result)
-      : (s.score != null ? `${s.score}/${s.wickets} · ${esc(String(s.overs))} ${esc(s.unit || "ov")}` : "—");
-    const meta = live ? '<span class="plive">LIVE</span>'
-      : '<span class="pago">' + relTime(r.updated_at) + "</span>";
-    return `<a class="pickrow" href="?m=${encodeURIComponent(r.id)}">
-      <div class="pinfo"><div class="pteams">${esc((s.teamA || "?") + " v " + (s.teamB || "?"))}</div>
-      <div class="psub">${sub}</div></div>
-      <div class="pmeta">${meta}<span class="pchev">›</span></div></a>`;
-  }).join("");
-  content.innerHTML = '<div class="pickhead">Choose a match</div>' + html;
+  const today = allRows.filter(r => isToday(r.updated_at));
+  const past = allRows.filter(r => !isToday(r.updated_at));
+
+  if (showArchive) {
+    let html = '<a class="backlink" id="toToday" href="#">‹ Today</a><div class="pickhead">Past matches</div>';
+    html += past.length ? past.map(r => matchRowHTML(r, true)).join("")
+                        : '<div class="waiting">No past matches.</div>';
+    content.innerHTML = html;
+    const t = document.getElementById("toToday");
+    if (t) t.onclick = e => { e.preventDefault(); showArchive = false; renderPicker(); };
+    return;
+  }
+
+  let html = '<div class="pickhead">Today’s matches</div>';
+  html += today.length ? today.map(r => matchRowHTML(r, false)).join("")
+                       : '<div class="waiting" style="margin-top:30px;">No matches today yet.</div>';
+  if (past.length) html += `<a class="archlink" id="toArchive" href="#">Past matches (${past.length}) ›</a>`;
+  content.innerHTML = html;
+  const a = document.getElementById("toArchive");
+  if (a) a.onclick = e => { e.preventDefault(); showArchive = true; renderPicker(); };
 }
 async function pollPicker() {
   try {
-    const r = await fetch(`${SUPABASE}/rest/v1/live_matches?select=id,state,updated_at&order=updated_at.desc&limit=40`,
+    const since = new Date(Date.now() - 150 * 86400000).toISOString(); // this season only
+    const r = await fetch(`${SUPABASE}/rest/v1/live_matches?select=id,state,updated_at&updated_at=gte.${since}&order=updated_at.desc&limit=200`,
       { headers: { apikey: ANON, Authorization: "Bearer " + ANON } });
-    renderPicker((await r.json()) || []);
+    allRows = (await r.json()) || [];
+    renderPicker();
   } catch (e) {
     document.getElementById("content").innerHTML = '<div class="waiting">Couldn’t load matches. Check your connection.</div>';
   }
