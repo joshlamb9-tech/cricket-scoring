@@ -1,7 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8">
+<script>/* Set theme before first paint to avoid a flash (default: dark, OLED-friendly) */
+try { document.documentElement.setAttribute('data-theme', localStorage.getItem('cricket-theme') || 'dark'); } catch (e) {}</script>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -51,6 +53,57 @@
   --shadow-navy: 0 6px 20px rgba(15, 35, 64, 0.28), 0 1px 3px rgba(15, 35, 64, 0.12);
   --shadow-gold: 0 4px 14px rgba(201, 169, 97, 0.32);
 }
+
+/* ========== DARK / OLED THEME (default) ========== */
+/* Near-black surfaces draw almost no power on an OLED iPhone, while text stays
+   high-contrast so the scoreboard remains readable in bright sun. */
+html[data-theme="dark"] {
+  --bg: #05080c;
+  --bg-warm: #0d141d;
+  --card: #0f1822;
+  --ink: #eef2f7;
+  --ink-soft: #c2ccd8;
+  --muted: #8b95a3;
+  --line: #1b2632;
+  --line-strong: #2b3a49;
+}
+html[data-theme="dark"] body {
+  background-image:
+    radial-gradient(circle at 0% 0%, rgba(201, 169, 97, 0.05) 0%, transparent 40%),
+    radial-gradient(circle at 100% 100%, rgba(30, 58, 95, 0.08) 0%, transparent 40%);
+}
+html[data-theme="dark"] body::before { opacity: 0.06; }
+html[data-theme="dark"] .match-item { background: var(--card); }
+html[data-theme="dark"] .btn-secondary { background: var(--card); color: #d3deea; border-color: var(--navy-mid); }
+html[data-theme="dark"] .btn-secondary:active { background: var(--navy-mid); color: #fff; }
+html[data-theme="dark"] input[type="text"],
+html[data-theme="dark"] input[type="number"],
+html[data-theme="dark"] select,
+html[data-theme="dark"] textarea { background: var(--bg-warm); color: var(--ink); border-color: var(--line-strong); }
+html[data-theme="dark"] .run-btn {
+  background: linear-gradient(180deg, #18242f 0%, #101924 100%);
+  color: #e9eff6; border-color: var(--line-strong);
+  box-shadow: var(--shadow-sm);
+}
+html[data-theme="dark"] .run-btn:active { background: linear-gradient(180deg, var(--navy) 0%, var(--navy-deep) 100%); color: #fff; }
+html[data-theme="dark"] .extra-btn { background: linear-gradient(180deg, #18242f 0%, #101924 100%); color: #f0e6cf; }
+html[data-theme="dark"] .extra-btn.wicket { background: linear-gradient(180deg, #2a1416 0%, #1a0d0e 100%); color: #ff8a8a; }
+html[data-theme="dark"] .ball-pip { background: var(--bg-warm); color: var(--ink-soft); border-color: var(--line-strong); }
+html[data-theme="dark"] .scorecard-table tbody tr:hover { background: var(--bg-warm); }
+/* Lift navy-on-light text so it stays legible on dark surfaces */
+html[data-theme="dark"] .card h2,
+html[data-theme="dark"] .modal h2 { color: var(--gold-bright); }
+html[data-theme="dark"] .match-item .teams { color: #e9eff6; }
+html[data-theme="dark"] .scorecard-table td.name { color: #dce5ef; }
+html[data-theme="dark"] .batters-row.striker .stats { color: var(--gold-bright); }
+html[data-theme="dark"] .btn-ghost { color: #aebccd; }
+html[data-theme="dark"] .match-item .versus { color: var(--gold); }
+
+/* Respect the OS "Reduce Motion" setting — stops the perpetual pulse animations. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; }
+}
+
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body {
   margin: 0; padding: 0; height: 100%; overflow-x: hidden;
@@ -1213,6 +1266,7 @@ function render() {
   if (toast) html += `<div class="toast">${escapeHtml(toast)}</div>`;
   app.innerHTML = html;
   attachEventHandlers();
+  tickWakeLock();   // keep the screen-awake policy in sync with the current view
 }
 
 function escapeHtml(s) { return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
@@ -1221,6 +1275,7 @@ function renderHome() {
   return `
     <header>
       <h1>Cricket Scorer</h1>
+      <button class="icon-btn" data-action="toggle-theme" title="Toggle dark / light">${currentTheme() === 'dark' ? '☀' : '☾'}</button>
     </header>
     <main>
       <div class="home-hero">
@@ -1647,6 +1702,7 @@ function renderModal() {
       <h2>Menu</h2>
       <div class="modal-list">
         <button class="btn btn-secondary" data-action="scorecard">View Scorecard</button>
+        <button class="btn btn-secondary" data-action="toggle-theme">Switch to ${currentTheme() === 'dark' ? 'Light' : 'Dark'} Theme</button>
         <button class="btn btn-secondary" data-action="edit-settings">Edit Match Settings / Rules</button>
         <button class="btn btn-secondary" data-action="edit-names">Edit Player Names</button>
         <button class="btn btn-secondary" data-action="change-bowler">Change Bowler (mid-over)</button>
@@ -1931,6 +1987,7 @@ function handleAction(e) {
   e.stopPropagation();
   const el = e.currentTarget;
   const action = el.dataset.action;
+  if (action === 'toggle-theme') { closeModal(); toggleTheme(); return; }
   if (action === 'new-match') { view = 'setup'; render(); return; }
   if (action === 'goto-home') { view = 'home'; modal = null; render(); return; }
   if (action === 'open-match') { match = matches.find(m => m.id === el.dataset.id); view = match.result ? 'scorecard' : 'scoring'; stateHistory = []; render(); return; }
@@ -2095,9 +2152,70 @@ function handleAction(e) {
 }
 
 // =========================================================================
+// THEME (dark default, OLED-friendly)
+// =========================================================================
+function currentTheme() { return document.documentElement.getAttribute('data-theme') || 'dark'; }
+function applyTheme(t) {
+  document.documentElement.setAttribute('data-theme', t);
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute('content', t === 'dark' ? '#05080c' : '#1e3a5f');
+  try { localStorage.setItem('cricket-theme', t); } catch (e) {}
+}
+function toggleTheme() { applyTheme(currentTheme() === 'dark' ? 'light' : 'dark'); render(); }
+
+// =========================================================================
+// SCREEN WAKE LOCK — held ONLY while actively scoring, released when idle.
+// This is the single biggest battery lever after the dark theme: it lets the
+// screen lock during the gaps (between overs, drinks, innings) instead of
+// burning hours of idle screen-on time. Restore a normal iOS Auto-Lock for it
+// to take effect. Re-acquires on the next tap and whenever the tab returns to
+// the foreground (iOS drops the lock when the page is backgrounded).
+// =========================================================================
+let _wakeLock = null;
+let _wakeIdle = null;
+let _wakeAcquiring = false;
+const WAKE_IDLE_MS = 120000; // 2 min — ball-to-ball taps keep it awake; real breaks let the screen lock
+
+function wakeSupported() { return 'wakeLock' in navigator; }
+async function acquireWakeLock() {
+  if (!wakeSupported() || _wakeLock || _wakeAcquiring || document.visibilityState !== 'visible') return;
+  _wakeAcquiring = true;
+  try {
+    _wakeLock = await navigator.wakeLock.request('screen');
+    _wakeLock.addEventListener('release', () => { _wakeLock = null; });
+  } catch (e) { /* rejected (not visible / no gesture yet) — retried on next interaction */ }
+  finally { _wakeAcquiring = false; }
+}
+async function releaseWakeLock() {
+  clearTimeout(_wakeIdle);
+  if (_wakeLock) { try { await _wakeLock.release(); } catch (e) {} _wakeLock = null; }
+}
+function tickWakeLock() {
+  // Runs after every render (i.e. every interaction) and on visibility change.
+  if (view === 'scoring' && document.visibilityState === 'visible') {
+    acquireWakeLock();
+    clearTimeout(_wakeIdle);
+    _wakeIdle = setTimeout(releaseWakeLock, WAKE_IDLE_MS);
+  } else {
+    releaseWakeLock();
+  }
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    tickWakeLock();                       // re-acquire on return to foreground
+  } else {
+    clearTimeout(_wakeIdle);              // pause idle timer; iOS already dropped the lock
+    _wakeLock = null;
+    if (match) upsertMatch();             // persist whenever we're backgrounded
+  }
+});
+
+// =========================================================================
 // BOOT
 // =========================================================================
 loadAll();
+applyTheme(currentTheme());   // sync meta theme-color + storage with the pre-paint theme
 render();
 window.addEventListener('beforeunload', () => { if (match) upsertMatch(); });
 </script>
