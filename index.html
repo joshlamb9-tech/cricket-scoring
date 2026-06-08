@@ -696,6 +696,8 @@ function loadAll() {
         if (m.noBallPenalty == null) m.noBallPenalty = 1;
         if (m.wideRebowled == null) m.wideRebowled = true;
         if (m.noBallRebowled == null) m.noBallRebowled = true;
+        // Matches saved before opener selection existed already have their openers set
+        (m.innings || []).forEach(ing => { if (ing.openersSet == null) ing.openersSet = true; });
       });
     }
   } catch (e) { console.error('Load failed', e); matches = []; }
@@ -759,6 +761,7 @@ function createInnings(m, battingTeam) {
     extras: { wides: 0, noBalls: 0, byes: 0, legByes: 0, penalty: 0 },
     striker: 0,
     nonStriker: 1,
+    openersSet: m.format === 'pairs',   // pairs are fixed; standard/Hundred prompt for openers
     batters: players.map((name, idx) => ({
       idx, name: name || `Batter ${idx+1}`,
       runs: 0, balls: 0, fours: 0, sixes: 0,
@@ -1256,6 +1259,13 @@ function closeModal() { modal = null; render(); }
 // RENDER
 // =========================================================================
 function render() {
+  // Fresh standard/Hundred innings — ask who's opening before scoring starts.
+  if (view === 'scoring' && match && !modal) {
+    const ing = currentInnings();
+    if (ing && !ing.openersSet && ing.ballsBowled === 0) {
+      modal = { type: 'select-openers', data: { phase: 'striker', strikerIdx: null } };
+    }
+  }
   const app = document.getElementById('app');
   let html = '';
   if (view === 'home') html = renderHome();
@@ -1596,6 +1606,23 @@ function renderModal() {
       </div>
       ${match.format === 'hundred' ? '' : '<div class="muted" style="margin-top:8px; font-size:0.85rem;">(Bowler cannot bowl consecutive overs — previous bowler hidden)</div>'}
       <button class="btn btn-ghost btn-full" data-action="close-modal" style="margin-top:10px;">Cancel</button>
+    `;
+  } else if (modal.type === 'select-openers') {
+    const ing = currentInnings();
+    const teamName = ing.battingTeam === 'a' ? match.teamA : match.teamB;
+    const phase = modal.data.phase;
+    const heading = phase === 'striker'
+      ? 'Tap the opener who takes first strike'
+      : "Tap the opener at the non-striker's end";
+    const avail = ing.batters.filter(b => phase === 'striker' || b.idx !== modal.data.strikerIdx);
+    body = `
+      <h2>${escapeHtml(teamName)} — opening batters</h2>
+      <div class="muted" style="margin-bottom:10px; font-size:0.88rem;">${heading}${phase === 'nonStriker' ? ` <span style="color:var(--gold-deep); font-weight:600;">· on strike: ${escapeHtml(ing.batters[modal.data.strikerIdx].name)}</span>` : ''}</div>
+      <div class="modal-list">
+        ${avail.map(b => `
+          <button class="btn btn-secondary" data-action="pick-opener" data-idx="${b.idx}">${escapeHtml(b.name)}${phase === 'striker' ? ' <span style="margin-left:auto; color:var(--gold); font-size:0.8rem;">⟶ on strike</span>' : ''}</button>
+        `).join('')}
+      </div>
     `;
   } else if (modal.type === 'select-batter') {
     body = `
@@ -2077,6 +2104,25 @@ function handleAction(e) {
   if (action === 'export-pdf') { generatePDF(); return; }
   if (action === 'select-bowler') { promptBowler(false); return; }
   if (action === 'pick-bowler') { pickBowler(parseInt(el.dataset.idx)); upsertMatch(); render(); return; }
+  if (action === 'pick-opener') {
+    const idx = parseInt(el.dataset.idx);
+    const ing = currentInnings();
+    if (modal.data.phase === 'striker') {
+      modal.data.strikerIdx = idx;
+      modal.data.phase = 'nonStriker';
+      render();
+    } else {
+      ing.striker = modal.data.strikerIdx;
+      ing.nonStriker = idx;
+      ing.batters.forEach(b => { b.in = false; });
+      ing.batters[ing.striker].in = true;
+      ing.batters[ing.nonStriker].in = true;
+      ing.openersSet = true;
+      upsertMatch();
+      closeModal();
+    }
+    return;
+  }
   if (action === 'pick-batter') {
     const crossed = modal && modal.data ? !!modal.data.crossed : false;
     pickBatter(parseInt(el.dataset.idx), el.dataset.position, crossed);
@@ -2145,7 +2191,7 @@ function handleAction(e) {
   if (action === 'close-modal') { closeModal(); return; }
   if (action === 'close-modal-backdrop') {
     // Don't let a stray backdrop tap strand a forced decision (new batter after a wicket)
-    if (modal && modal.type === 'select-batter') return;
+    if (modal && (modal.type === 'select-batter' || modal.type === 'select-openers')) return;
     if (e.target === el) closeModal();
     return;
   }
