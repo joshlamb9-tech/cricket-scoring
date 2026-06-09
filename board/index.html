@@ -123,6 +123,7 @@
 const SUPABASE = "https://dlcseuejvducbsjhqvze.supabase.co";
 const ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRsY3NldWVqdmR1Y2JzamhxdnplIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI1MzY3NTUsImV4cCI6MjA4ODExMjc1NX0.MPkeXx_3cgm99RabE4W97jhFtB1ZXycUsR0ofCnNEPs";
 const matchId = new URLSearchParams(location.search).get("m");
+const club = new URLSearchParams(location.search).get("s");
 
 // ---------- split-flap ----------
 function ensureFlaps(container, len, sizeClass) {
@@ -299,9 +300,13 @@ function renderPicker() {
   if (a) a.onclick = e => { e.preventDefault(); showArchive = true; renderPicker(); };
 }
 async function pollPicker() {
+  if (!club) {
+    document.getElementById("content").innerHTML = '<div class="waiting">This scoreboard link is missing its school code. Ask for the full link.</div>';
+    return;
+  }
   try {
     const since = new Date(Date.now() - 150 * 86400000).toISOString(); // this season only
-    const r = await fetch(`${SUPABASE}/rest/v1/live_matches?select=id,state,updated_at&updated_at=gte.${since}&order=updated_at.desc&limit=200`,
+    const r = await fetch(`${SUPABASE}/rest/v1/live_matches?select=id,state,updated_at&club=eq.${encodeURIComponent(club)}&updated_at=gte.${since}&order=updated_at.desc&limit=200`,
       { headers: { apikey: ANON, Authorization: "Bearer " + ANON } });
     allRows = (await r.json()) || [];
     renderPicker();
@@ -316,7 +321,7 @@ if (matchId) {
   setInterval(poll, 4000);
 } else {
   document.getElementById("live").style.display = "none";
-  document.getElementById("teams").textContent = "LIVE CRICKET";
+  document.getElementById("teams").textContent = club ? (club.toUpperCase() + " CRICKET") : "LIVE CRICKET";
   pollPicker();
   setInterval(pollPicker, 10000);
 }
