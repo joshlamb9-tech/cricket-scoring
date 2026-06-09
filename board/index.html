@@ -108,6 +108,18 @@
   .archlink { display:block; text-align:center; color:var(--gold); text-decoration:none;
     font-weight:700; font-size:14px; margin-top:20px; padding:12px; }
   .archlink:active { color:var(--gold-bright); }
+
+  /* school-code recovery gate */
+  .codegate { margin-top:60px; text-align:center; }
+  .codegate p { color:var(--muted); font-size:14px; margin-bottom:16px; line-height:1.5; }
+  .codeform { display:flex; gap:8px; max-width:320px; margin:0 auto; }
+  .codeform input { flex:1; min-width:0; background:var(--navy); color:var(--ink);
+    border:1px solid rgba(224,189,110,0.35); border-radius:10px; padding:12px 14px;
+    font-size:16px; font-weight:600; outline:none; }
+  .codeform input:focus { border-color:var(--gold); }
+  .codeform button { flex:none; background:var(--gold); color:var(--navy-deep); border:0;
+    border-radius:10px; padding:12px 18px; font-size:15px; font-weight:800; cursor:pointer; }
+  .codeform button:active { background:var(--gold-bright); }
 </style>
 </head>
 <body>
@@ -123,7 +135,20 @@
 const SUPABASE = "https://dlcseuejvducbsjhqvze.supabase.co";
 const ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRsY3NldWVqdmR1Y2JzamhxdnplIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI1MzY3NTUsImV4cCI6MjA4ODExMjc1NX0.MPkeXx_3cgm99RabE4W97jhFtB1ZXycUsR0ofCnNEPs";
 const matchId = new URLSearchParams(location.search).get("m");
-const club = new URLSearchParams(location.search).get("s");
+// School code: prefer the ?s= param, else fall back to a remembered code.
+// Persist whenever a code is present so internal navigation never dead-ends.
+const CLUB_KEY = "cricket-board-club";
+let club = new URLSearchParams(location.search).get("s");
+try {
+  if (club) localStorage.setItem(CLUB_KEY, club);
+  else club = localStorage.getItem(CLUB_KEY);
+} catch (e) {}
+// Append ?s=<club> to an internal href so navigation keeps the school context.
+function withClub(href) {
+  if (!club) return href;
+  const sep = href.indexOf("?") === -1 ? "?" : "&";
+  return href + sep + "s=" + encodeURIComponent(club);
+}
 
 // ---------- split-flap ----------
 function ensureFlaps(container, len, sizeClass) {
@@ -168,7 +193,7 @@ function setFlaps(container, text, len, sizeClass) {
 let built = false;
 function buildLayout() {
   document.getElementById("content").innerHTML = `
-    <a class="backlink" href="./">‹ All matches</a>
+    <a class="backlink" href="${withClub('./')}">‹ All matches</a>
     <div class="panel">
       <div class="batting" id="batting"></div>
       <div class="scoreline"><div class="flaps big" id="score"></div></div>
@@ -271,7 +296,7 @@ function matchRowHTML(r, withDate) {
     : (s.score != null ? `${s.score}/${s.wickets} · ${esc(String(s.overs))} ${esc(s.unit || "ov")}` : "—");
   const meta = live ? '<span class="plive">LIVE</span>'
     : '<span class="pago">' + (withDate ? dayLabel(r.updated_at) : relTime(r.updated_at)) + "</span>";
-  return `<a class="pickrow" href="?m=${encodeURIComponent(r.id)}">
+  return `<a class="pickrow" href="${withClub('?m=' + encodeURIComponent(r.id))}">
     <div class="pinfo"><div class="pteams">${esc((s.teamA || "?") + " v " + (s.teamB || "?"))}</div>
     <div class="psub">${sub}</div></div>
     <div class="pmeta">${meta}<span class="pchev">›</span></div></a>`;
@@ -299,11 +324,28 @@ function renderPicker() {
   const a = document.getElementById("toArchive");
   if (a) a.onclick = e => { e.preventDefault(); showArchive = true; renderPicker(); };
 }
+function showCodeGate() {
+  // Idempotent: don't rebuild (and wipe what the user is typing) if already shown.
+  if (document.getElementById("codeform")) return;
+  document.getElementById("content").innerHTML =
+    '<div class="codegate">' +
+      '<p>Enter your school code to see its matches.</p>' +
+      '<form class="codeform" id="codeform">' +
+        '<input id="codeinput" type="text" autocapitalize="none" autocorrect="off" ' +
+        'spellcheck="false" placeholder="e.g. sedbergh" aria-label="School code">' +
+        '<button type="submit">View</button>' +
+      '</form>' +
+    '</div>';
+  const form = document.getElementById("codeform");
+  form.onsubmit = e => {
+    e.preventDefault();
+    const code = document.getElementById("codeinput").value.trim().toLowerCase();
+    if (!code) return;
+    location.href = "?s=" + encodeURIComponent(code);
+  };
+}
 async function pollPicker() {
-  if (!club) {
-    document.getElementById("content").innerHTML = '<div class="waiting">This scoreboard link is missing its school code. Ask for the full link.</div>';
-    return;
-  }
+  if (!club) { showCodeGate(); return; }
   try {
     const since = new Date(Date.now() - 150 * 86400000).toISOString(); // this season only
     const r = await fetch(`${SUPABASE}/rest/v1/live_matches?select=id,state,updated_at&club=eq.${encodeURIComponent(club)}&updated_at=gte.${since}&order=updated_at.desc&limit=200`,
