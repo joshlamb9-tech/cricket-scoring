@@ -83,6 +83,39 @@
 
   .status { margin-top:16px; text-align:center; font-size:16px; font-weight:700; color:var(--gold-bright);
     min-height:22px; }
+
+  /* ---- scorecard (builds up below the live view) ---- */
+  .sc-title { margin-top:26px; font-size:12px; font-weight:800; letter-spacing:0.14em;
+    text-transform:uppercase; color:var(--muted); text-align:center; }
+  .sc-panel { margin-top:12px; background:linear-gradient(180deg,#1a2a44,#101b2e); border-radius:14px;
+    padding:14px 13px; box-shadow:0 6px 22px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.05); }
+  .sc-head { display:flex; align-items:baseline; justify-content:space-between; margin-bottom:8px; }
+  .sc-head .sc-team { font-size:14px; font-weight:800; letter-spacing:0.04em; text-transform:uppercase;
+    color:var(--gold); }
+  .sc-head .sc-score { font-size:14px; font-weight:800; font-variant-numeric:tabular-nums; }
+  .sc-head .sc-ov { font-size:12px; font-weight:600; color:var(--muted); margin-left:6px; }
+  .sc-table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+  .sc-table th { font-size:10px; font-weight:800; letter-spacing:0.08em; text-transform:uppercase;
+    color:var(--gold); text-align:right; padding:5px 0 5px 8px; border-bottom:1px solid rgba(255,255,255,0.08); }
+  .sc-table th:first-child { text-align:left; padding-left:0; }
+  .sc-table td { font-size:14px; font-weight:600; text-align:right; padding:6px 0 6px 8px;
+    border-bottom:1px solid rgba(255,255,255,0.06); white-space:nowrap; }
+  .sc-table td:first-child { text-align:left; padding-left:0; max-width:0; width:99%;
+    overflow:hidden; text-overflow:ellipsis; }
+  .sc-table tr:last-child td { border-bottom:0; }
+  .sc-table .sc-r { font-weight:800; }
+  .sc-table .sc-w { font-weight:800; }
+  .sc-how { font-size:11px; font-weight:500; font-style:italic; color:var(--muted); margin-top:1px;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .sc-nm { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .sc-nm .star { color:var(--gold-bright); }
+  .sc-extras { display:flex; justify-content:space-between; font-size:12px; font-weight:600;
+    color:var(--muted); padding:8px 0; border-bottom:1px solid rgba(255,255,255,0.08); }
+  .sc-extras .sc-total { color:var(--ink); font-weight:800; font-variant-numeric:tabular-nums; }
+  .sc-fow { font-size:11px; color:var(--muted); line-height:1.6; padding:8px 0 10px; }
+  .sc-fow .sc-fowlbl { font-weight:800; letter-spacing:0.08em; text-transform:uppercase; color:var(--gold);
+    margin-right:4px; }
+  .sc-bowl { margin-top:4px; }
   .result { margin-top:16px; text-align:center; background:var(--gold); color:var(--navy-deep);
     font-weight:800; font-size:17px; padding:12px; border-radius:12px; }
   .foot { margin-top:22px; text-align:center; font-size:11px; color:var(--muted); letter-spacing:0.04em; }
@@ -207,6 +240,7 @@ function buildLayout() {
     </div>
     <div class="status" id="status"></div>
     <div id="resultwrap"></div>
+    <div id="scorecard"></div>
     <div class="foot">Live from Cricket Scorer · updates each over</div>`;
   built = true;
 }
@@ -247,6 +281,38 @@ function render(s, updatedAt) {
 
   const rw = document.getElementById("resultwrap");
   rw.innerHTML = s.result ? '<div class="result">' + esc(s.result) + '</div>' : "";
+
+  renderScorecard(s);
+}
+
+// Full scorecard below the live view. `s.card` arrived in the 10 Jun app build —
+// older payloads simply don't have it, so the board shows nothing extra.
+function renderScorecard(s) {
+  const el = document.getElementById("scorecard");
+  if (!s.card || !s.card.length) { el.innerHTML = ""; return; }
+  const ovUnit = s.unit === "balls" ? "B" : "O";
+  el.innerHTML = '<div class="sc-title">Scorecard</div>' + s.card.map(c => {
+    const batRows = (c.batting || []).map(b =>
+      `<tr><td><div class="sc-nm">${esc(b.name)}${b.live ? ' <span class="star">*</span>' : ""}</div>` +
+      `<div class="sc-how">${esc(b.how)}</div></td>` +
+      `<td class="sc-r">${b.runs}</td><td>${b.balls}</td><td>${b.fours}</td><td>${b.sixes}</td></tr>`).join("");
+    const bowlRows = (c.bowling || []).map(b =>
+      `<tr><td><div class="sc-nm">${esc(b.name)}</div></td>` +
+      `<td>${esc(String(b.overs))}</td><td>${b.maidens}</td><td>${b.runs}</td><td class="sc-w">${b.wickets}</td></tr>`).join("");
+    return `<div class="sc-panel">
+      <div class="sc-head"><span class="sc-team">${esc(c.team)}</span>
+        <span class="sc-score">${c.score}/${c.wickets}<span class="sc-ov">(${esc(String(c.overs))} ${esc(s.unit || "ov")})</span></span></div>
+      ${batRows ? `<table class="sc-table">
+        <thead><tr><th>Batter</th><th>R</th><th>B</th><th>4s</th><th>6s</th></tr></thead>
+        <tbody>${batRows}</tbody></table>` : ""}
+      <div class="sc-extras"><span>Extras ${c.extras} (${esc(c.extrasDetail || "")})</span>
+        <span class="sc-total">Total ${c.score}/${c.wickets}</span></div>
+      ${c.fow && c.fow.length ? `<div class="sc-fow"><span class="sc-fowlbl">Fall of wickets</span>${c.fow.map(esc).join(", ")}</div>` : ""}
+      ${bowlRows ? `<table class="sc-table sc-bowl">
+        <thead><tr><th>Bowler</th><th>${ovUnit}</th><th>M</th><th>R</th><th>W</th></tr></thead>
+        <tbody>${bowlRows}</tbody></table>` : ""}
+    </div>`;
+  }).join("");
 }
 
 function setLive(updatedAt) {
@@ -258,10 +324,16 @@ function setLive(updatedAt) {
   else { live.classList.add("stale"); txt.textContent = "Paused"; }
 }
 
+// Dev only: ?fixture=<file> renders a local JSON fixture (same shape as the
+// Supabase response) instead of polling — e.g. ?m=test&fixture=fixture.json
+const fixture = new URLSearchParams(location.search).get("fixture");
+
 async function poll() {
   if (!matchId) { document.getElementById("waiting").textContent = "No match specified."; return; }
   try {
-    const r = await fetch(`${SUPABASE}/rest/v1/live_matches?id=eq.${encodeURIComponent(matchId)}&select=state,updated_at`,
+    const r = fixture
+      ? await fetch(fixture)
+      : await fetch(`${SUPABASE}/rest/v1/live_matches?id=eq.${encodeURIComponent(matchId)}&select=state,updated_at`,
       { headers: { apikey: ANON, Authorization: "Bearer " + ANON } });
     const rows = await r.json();
     if (rows && rows[0]) { render(rows[0].state, rows[0].updated_at); setLive(rows[0].updated_at); }
