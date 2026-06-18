@@ -33,6 +33,10 @@
   .ov-wrap { margin-top:14px; display:flex; align-items:baseline; gap:10px; }
   .ov-label { font-size:11px; font-weight:700; letter-spacing:0.14em; text-transform:uppercase; color:var(--muted); }
 
+  /* version footer — subtle, centred, low-key for spectators */
+  #version-footer { margin-top:22px; text-align:center; font-size:10px; font-weight:600;
+    letter-spacing:0.06em; color:var(--muted); opacity:0.4; font-variant-numeric:tabular-nums; }
+
   /* ---- split-flap ---- */
   .flaps { display:flex; gap:5px; }
   .flap { position:relative; border-radius:7px; background:var(--navy);
@@ -162,9 +166,14 @@
       <div class="live stale" id="live"><span class="dot"></span><span id="livetxt">Connecting</span></div>
     </div>
     <div id="content"><div class="waiting" id="waiting">Waiting for the match to start…</div></div>
+    <div id="version-footer"></div>
   </div>
 
 <script>
+// Version — bump when shipping changes (semantic-ish: major.minor.patch)
+const APP_VERSION = 'v1.0.0';
+const BUILD_DATE  = '2026-06-18';
+
 const SUPABASE = "https://dlcseuejvducbsjhqvze.supabase.co";
 const ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRsY3NldWVqdmR1Y2JzamhxdnplIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI1MzY3NTUsImV4cCI6MjA4ODExMjc1NX0.MPkeXx_3cgm99RabE4W97jhFtB1ZXycUsR0ofCnNEPs";
 const matchId = new URLSearchParams(location.search).get("m");
@@ -428,6 +437,9 @@ async function pollPicker() {
     document.getElementById("content").innerHTML = '<div class="waiting">Couldn’t load matches. Check your connection.</div>';
   }
 }
+
+// stamp the version footer (sibling of #content, so it survives re-renders)
+document.getElementById("version-footer").textContent = APP_VERSION + " · " + BUILD_DATE;
 
 // ---------- router ----------
 if (matchId) {
