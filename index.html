@@ -690,23 +690,38 @@ function loadAll() {
       const data = JSON.parse(raw);
       matches = data.matches || [];
       // Backward-compat: default to 2 innings for matches saved before this option existed
-      matches.forEach(m => {
-        if (m.totalInnings == null) m.totalInnings = 2;
-        if (m.widePenalty == null) m.widePenalty = 1;
-        if (m.noBallPenalty == null) m.noBallPenalty = 1;
-        if (m.wideRebowled == null) m.wideRebowled = true;
-        if (m.noBallRebowled == null) m.noBallRebowled = true;
-        // Matches saved before opener/pair selection existed are already set up
-        (m.innings || []).forEach(ing => {
-          if (ing.openersSet == null) ing.openersSet = true;
-          if (ing.pairsSet == null) ing.pairsSet = true;
-        });
-      });
+      matches.forEach(normalizeMatch);
     }
   } catch (e) { console.error('Load failed', e); matches = []; }
 }
+// Back-compat migration: every field added after v1 must be optional with a
+// sensible default here, so a match saved on Josh's device before the parity
+// update still loads. Idempotent — safe to run on already-migrated matches.
+function normalizeMatch(m) {
+  if (!m) return m;
+  if (m.totalInnings == null) m.totalInnings = 2;
+  if (m.widePenalty == null) m.widePenalty = 1;
+  if (m.noBallPenalty == null) m.noBallPenalty = 1;
+  if (m.wideRebowled == null) m.wideRebowled = true;
+  if (m.noBallRebowled == null) m.noBallRebowled = true;
+  if (m.freeHitEnabled == null) m.freeHitEnabled = false;   // default OFF for old matches
+  if (m.events == null) m.events = null;                    // null => no log => can't be ball-edited (intentional)
+  if (m.undoStack == null) m.undoStack = [];                // start a fresh undo stack
+  (m.innings || []).forEach(ing => {
+    // Matches saved before opener/pair selection existed are already set up
+    if (ing.openersSet == null) ing.openersSet = true;
+    if (ing.pairsSet == null) ing.pairsSet = true;
+    if (ing.fow == null) ing.fow = [];
+    (ing.batters || []).forEach(b => { if (b.retiredNotOut == null) b.retiredNotOut = false; });
+    // Stale free-hit flag: a build where EVERY no-ball armed a free hit can leave a
+    // freeHit set true. With the rule off it would wrongly block a wicket — clear it.
+    if (!m.freeHitEnabled && ing.freeHit) ing.freeHit = false;
+  });
+  return m;
+}
+
 function upsertMatch() {
-  if (!match) return;
+  if (!match || _replay) return;   // no persistence while replaying
   match.updatedAt = new Date().toISOString();
   const idx = matches.findIndex(m => m.id === match.id);
   if (idx >= 0) matches[idx] = match;
@@ -740,11 +755,14 @@ function createMatch(opts) {
     noBallPenalty: opts.noBallPenalty != null ? opts.noBallPenalty : 1,
     wideRebowled: opts.wideRebowled != null ? opts.wideRebowled : true,
     noBallRebowled: opts.noBallRebowled != null ? opts.noBallRebowled : true,
+    freeHitEnabled: opts.freeHitEnabled != null ? opts.freeHitEnabled : false,  // default OFF (matches native)
     tossWonBy: opts.tossWonBy,              // 'a' | 'b'
     battingFirst: opts.battingFirst,        // 'a' | 'b'
     innings: [],
     currentInnings: 0,
     result: null,
+    events: [],              // replayable ball-by-ball event log
+    undoStack: [],           // persisted undo snapshots (cap 1000)
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
   };
@@ -770,6 +788,7 @@ function createInnings(m, battingTeam) {
       idx, name: name || `Batter ${idx+1}`,
       runs: 0, balls: 0, fours: 0, sixes: 0,
       out: false, howOut: null, in: idx < 2,
+      retiredNotOut: false,   // prep-cricket retirement (not a dismissal; can return)
     })),
     currentBowler: null,
     previousBowler: null,
@@ -780,6 +799,7 @@ function createInnings(m, battingTeam) {
     })),
     balls: [],               // log of every delivery
     thisOver: [],            // current over pips for display
+    fow: [],                 // fall of wickets, in order (not recorded in Pairs)
     freeHit: false,
     complete: false,
   };
@@ -801,16 +821,239 @@ function createInnings(m, battingTeam) {
 // =========================================================================
 // SCORING LOGIC
 // =========================================================================
+// Undo stack lives INSIDE the match (match.undoStack) so it survives a reload /
+// resume, mirroring the native engine's persisted undo (cap 1000). `stateHistory`
+// is kept as a thin alias for back-compat with existing call sites.
+const UNDO_CAP = 1000;
 function snapshot() {
-  stateHistory.push(JSON.stringify(match));
-  if (stateHistory.length > 30) stateHistory.shift();
+  if (!match || _replay) return;   // no undo snapshots while replaying
+  // Snapshot must exclude the undo stack itself, or each push nests the whole
+  // history inside the next entry and storage blows up. Strip it, stringify, restore.
+  const stack = match.undoStack; match.undoStack = undefined;
+  const snap = JSON.stringify(match);
+  match.undoStack = stack || [];
+  match.undoStack.push(snap);
+  if (match.undoStack.length > UNDO_CAP) match.undoStack.shift();
+  stateHistory = match.undoStack;   // keep the legacy reference pointing at the live stack
 }
 function undo() {
-  if (stateHistory.length === 0) { showToast('Nothing to undo'); return; }
-  const prev = stateHistory.pop();
+  if (!match || !match.undoStack || match.undoStack.length === 0) { showToast('Nothing to undo'); return; }
+  const prev = match.undoStack.pop();
+  const carriedStack = match.undoStack;       // the popped-from stack we want to keep
   match = JSON.parse(prev);
+  match.undoStack = carriedStack;             // restored snapshot had no stack — re-attach
+  stateHistory = match.undoStack;
   modal = null;   // a snapshot restore must clear any open prompt
   upsertMatch();
+  render();
+}
+
+// =========================================================================
+// EVENT LOG (replayable ball-by-ball history) — Models.BallEvent equivalent.
+// Every scoring action appends one event. The ball-by-ball editor rebuilds the
+// match by replaying this log from scratch, so an edit can never desync totals.
+// match.events is optional: matches saved before it existed have no log and
+// simply can't be ball-edited (replay() guards on its presence).
+// =========================================================================
+function record(ev) {
+  if (!match) return;
+  if (!match.events) match.events = [];
+  match.events.push(ev);
+}
+// Which events represent an actual delivery (the editable balls).
+function isDelivery(ev) { return ev.kind === 'runs' || ev.kind === 'extra' || ev.kind === 'wicket'; }
+// Short pip label for the edit list, e.g. "4", "wd+1", "2lb", "W", "R".
+function eventLabel(ev) {
+  if (ev.kind === 'runs') return `${ev.runs || 0}`;
+  if (ev.kind === 'extra') {
+    const n = ev.runs || 0;
+    if (ev.extra === 'wd') return n > 0 ? `wd+${n}` : 'wd';
+    if (ev.extra === 'nb') return n > 0 ? `nb+${n}` : 'nb';
+    if (ev.extra === 'b') return `${n}b`;
+    return `${n}lb`;
+  }
+  if (ev.kind === 'wicket') return 'W';
+  if (ev.kind === 'retire') return 'R';
+  return ev.kind;
+}
+
+// =========================================================================
+// REPLAY — rebuild a match from its event log (ball-by-ball editing).
+// Faithful port of CricketEngine.replay(): start from the match's CURRENT
+// settings with a clean slate, then re-apply each logged event through the very
+// same scoring functions. Because every total is recomputed from zero, an edit
+// can never desync the scorecard. Tolerant of edits (a newBatter whose wicket was
+// removed is skipped; a delivery with an unresolved dismissal brings in the next
+// logged/available batter; a delivery with no bowler picks the next logged/available).
+//
+// Implementation note: the scoring functions here mutate the module-level `match`
+// and read `modal`. We temporarily swap a private match/modal in, run the replay,
+// then return the rebuilt match. No persistence or render happens during replay.
+// =========================================================================
+// Replay state: when `_replay` is non-null the scoring functions run in "replay
+// mode" — they skip snapshot/upsert/render and, instead of opening a modal for a
+// new batter / bowler, set a pending marker the replay loop resolves. This keeps
+// the engine logic in ONE place (no parallel raw copies that could drift).
+let _replay = null;   // { pending: null|{position,crossed} }
+
+function replayMatch(settings, events) {
+  const base = JSON.parse(JSON.stringify(settings));
+  base.innings = [];
+  base.currentInnings = 0;
+  base.result = null;
+  base.events = [];
+  base.undoStack = [];
+  base.innings.push(createInnings(base, base.battingFirst));
+
+  const savedMatch = match, savedModal = modal;
+  match = base; modal = null;
+  _replay = { pending: null };
+  const consumed = new Set();
+
+  function avail() { return currentInnings().batters.filter(b => !b.out && !b.in); }
+
+  // Bring in the next logged newBatter (stopping at the next wicket/retire so a
+  // later dismissal's replacement isn't stolen), else the first available.
+  function resolvePending(afterIdx) {
+    const p = _replay.pending; if (!p) return;
+    _replay.pending = null;
+    let choice = null, crossed = !!p.crossed, j = afterIdx + 1;
+    while (j < events.length && events[j].kind !== 'wicket' && events[j].kind !== 'retire') {
+      if (!consumed.has(j) && events[j].kind === 'newBatter') break;
+      j++;
+    }
+    if (j < events.length && events[j].kind === 'newBatter' && events[j].batter != null
+        && avail().some(b => b.idx === events[j].batter)) {
+      consumed.add(j);
+      choice = events[j].batter;
+      crossed = events[j].crossed != null ? events[j].crossed : crossed;
+    } else {
+      const a = avail(); choice = a.length ? a[0].idx : null;
+    }
+    if (choice != null) pickBatter(choice, p.position, crossed);
+  }
+  function resolveBowler(afterIdx) {
+    if (!needBowler()) return;
+    const ing = currentInnings();
+    let j = afterIdx + 1;
+    while (j < events.length) {
+      if (!consumed.has(j) && events[j].kind === 'pickBowler') {
+        consumed.add(j);
+        if (events[j].bowler != null) pickBowler(events[j].bowler);
+        return;
+      }
+      j++;
+    }
+    const noRestriction = match.format === 'hundred';
+    const av = ing.bowlers.filter(b => noRestriction || b.idx !== ing.previousBowler);
+    if (av.length) pickBowler(av[0].idx);
+  }
+
+  try {
+    for (let i = 0; i < events.length; i++) {
+      if (consumed.has(i)) continue;
+      if (match.result != null) break;     // an edit finished the match early — drop the tail
+      const ev = events[i];
+      switch (ev.kind) {
+        case 'runs': case 'extra': case 'wicket':
+          resolvePending(i);
+          resolveBowler(i);
+          if (ev.kind === 'runs') addRuns(ev.runs || 0);
+          else if (ev.kind === 'extra') addExtra(ev.extra, ev.runs || 0);
+          else addWicket(ev.method || 'Bowled', ev.position || 'striker', ev.runs || 0, !!ev.crossed, ev.fielder || null);
+          break;
+        case 'retire':
+          resolvePending(i);
+          retire(ev.position || 'striker');
+          break;
+        case 'newBatter': {
+          const p = _replay.pending;
+          if (p && ev.batter != null && avail().some(b => b.idx === ev.batter)) {
+            pickBatter(ev.batter, p.position, ev.crossed != null ? ev.crossed : p.crossed);
+            _replay.pending = null;
+          } // else its wicket/retire was edited away — skip
+          break;
+        }
+        case 'pickBowler':
+          if (ev.bowler != null) pickBowler(ev.bowler);
+          break;
+        case 'setOpeners': {
+          const ing = currentInnings();
+          ing.striker = ev.striker != null ? ev.striker : 0;
+          ing.nonStriker = ev.nonStriker != null ? ev.nonStriker : 1;
+          ing.batters.forEach(b => { b.in = false; });
+          ing.batters[ing.striker].in = true;
+          ing.batters[ing.nonStriker].in = true;
+          ing.openersSet = true;
+          record({ kind: 'setOpeners', striker: ing.striker, nonStriker: ing.nonStriker });
+          break;
+        }
+        case 'swapStrike':
+          record({ kind: 'swapStrike' }); swapStrike();
+          break;
+        case 'endOver':
+          if (!needBowler()) { record({ kind: 'endOver' }); endOver(); }
+          break;
+      }
+    }
+  } finally {
+    const rebuilt = match;
+    match = savedMatch; modal = savedModal; _replay = null;
+    return rebuilt;
+  }
+}
+
+// Open the ball-by-ball editor. Requires an event log (matches saved before the
+// log existed can't be edited — null events). Lists every delivery with its label.
+function openBallEditor() {
+  if (!match.events || match.events.length === 0) {
+    showToast('No ball history to edit (older match)');
+    return;
+  }
+  view = 'edit-balls';
+  render();
+}
+
+// Apply an edited event log: rebuild the match by replay, copy the rebuilt play
+// back into the live match (preserving identity/timestamps), persist, re-render.
+function applyEditedEvents(newEvents) {
+  const rebuilt = replayMatch(match, newEvents);
+  // Copy rebuilt play state onto the live match object (keep id/createdAt/etc).
+  match.innings = rebuilt.innings;
+  match.currentInnings = rebuilt.currentInnings;
+  match.result = rebuilt.result;
+  match.events = rebuilt.events;
+  // Editing past balls invalidates the old undo snapshots (they reference a now-
+  // divergent history) — start a fresh stack so undo stays coherent.
+  match.undoStack = [];
+  stateHistory = match.undoStack;
+  upsertMatch();
+}
+
+// Delete a single delivery (by event index) and re-derive the whole match.
+function editorDeleteBall(eidx) {
+  if (!confirm('Delete this ball? The scorecard will be rebuilt.')) return;
+  const evs = match.events.slice();
+  evs.splice(eidx, 1);
+  applyEditedEvents(evs);
+  showToast('Ball deleted — scorecard rebuilt');
+  render();
+}
+
+// Change a delivery's runs (the common correction). Only offered for plain-run
+// and bye/leg-bye/wide/no-ball deliveries; wickets are delete-and-re-enter.
+function editorChangeBall(eidx) {
+  const ev = match.events[eidx];
+  if (!ev || !isDelivery(ev)) return;
+  modal = { type: 'editor-runs', data: { eidx } };
+  render();
+}
+function editorApplyRuns(eidx, runs) {
+  const evs = match.events.map((e, i) => i === eidx ? Object.assign({}, e, { runs }) : e);
+  closeModal();
+  applyEditedEvents(evs);
+  showToast('Ball updated — scorecard rebuilt');
+  view = 'edit-balls';
   render();
 }
 
@@ -830,9 +1073,24 @@ function bowler() {
 
 function needBowler() { return currentInnings().currentBowler == null; }
 
+// A scoring action must be a no-op when the match is already decided, or while a
+// forced decision is still open (a new batter / opener / pair / bowler must be
+// chosen first). Mirrors the engine's `guard match.result == nil` plus the
+// NeedsNewBatter gate — without it a stray tap behind a modal corrupts totals
+// (e.g. a delivery counted while the over was waiting on the next batter — the
+// 9-ball-over bug's sibling).
+function scoringBlocked() {
+  if (match && match.result) return true;
+  if (modal && (modal.type === 'select-batter' || modal.type === 'select-openers'
+             || modal.type === 'setup-pairs' || modal.type === 'select-bowler')) return true;
+  return false;
+}
+
 function addRuns(runs, isExtra) {
+  if (scoringBlocked()) return;
   if (needBowler()) { promptBowler(); return; }
   snapshot();
+  record({ kind: 'runs', runs });
   const ing = currentInnings();
   const b = bowler();
   const s = striker();
@@ -860,8 +1118,10 @@ function addRuns(runs, isExtra) {
 }
 
 function addExtra(type, runs) {
+  if (scoringBlocked()) return;
   if (needBowler()) { promptBowler(); return; }
   snapshot();
+  record({ kind: 'extra', extra: type, runs });
   const ing = currentInnings();
   const b = bowler();
   const s = striker();
@@ -909,7 +1169,9 @@ function addExtra(type, runs) {
     if (runs % 2 === 1) swapStrike();
     ing.thisOver.push({ runs: nbRuns, type: 'extra', label });
     ing.balls.push({ batter: s.idx, bowler: b.idx, runs: nbRuns, type: 'noball', label });
-    ing.freeHit = true;
+    // Only arm a free hit if the rule is enabled for this match (default off —
+    // the right default for most prep/junior cricket).
+    ing.freeHit = !!match.freeHitEnabled;
     // If not re-bowled, count as a ball
     if (match.noBallRebowled === false) {
       b.balls += 1;
@@ -962,8 +1224,22 @@ function addWicket(howOut, batterOutPos, runsCompleted, crossed, fielderName) {
   // runsCompleted: runs taken before wicket (run-outs etc.)
   // crossed: true if batters crossed before catch/run-out (affects who is on strike next)
   // fielderName: catcher's name for Caught dismissals (or null)
+  if (match.result) return;            // match already decided — no-op
+  // "Retired" is not a real dismissal — route to the not-out retirement path
+  // (no wicket, no bowler credit, no FOW, batter can return).
+  if (howOut === 'Retired') { retire(batterOutPos === 'non-striker' ? 'non-striker' : 'striker'); return; }
   if (needBowler()) { promptBowler(); return; }
+  const ing0 = currentInnings();
+  // Free hit: only a run-out (or retired) can dismiss the batter. The UI filters
+  // the wicket menu too; this is the backstop that rejects anything else.
+  if (ing0.freeHit && howOut !== 'Run out' && howOut !== 'Retired') {
+    showToast('Free hit — only run out');
+    return;
+  }
   snapshot();
+  record({ kind: 'wicket', runs: runsCompleted || 0, method: howOut,
+           position: batterOutPos === 'non-striker' ? 'non-striker' : 'striker',
+           crossed: !!crossed, fielder: fielderName || null });
   const ing = currentInnings();
   const b = bowler();
   const s = striker();
@@ -1000,14 +1276,23 @@ function addWicket(howOut, batterOutPos, runsCompleted, crossed, fielderName) {
     ing.score += match.pairsConfig.runsPerWicket;
   }
 
-  // Bowler gets credit unless run-out / obstructing / retired-out etc.
-  const bowlerCredit = !['Run out', 'Retired', 'Obstructing'].includes(howOut);
+  // Bowler gets credit unless it's a run-out. (Retired never reaches here — it's
+  // routed to retire() before any of this; left out of the list as documentation.)
+  const bowlerCredit = howOut !== 'Run out';
   if (bowlerCredit) b.wickets += 1;
 
   ing.thisOver.push({ runs, type: 'wicket', label: 'W' });
   ing.balls.push({ batter: outBatter.idx, bowler: b.idx, runs, type: 'wicket', howOut: outBatter.howOut, label: 'W' });
 
   ing.freeHit = false;
+
+  // Fall of wicket (NOT in Pairs — there the batter stays and the pair loses runs
+  // instead, so there's no conventional FOW). Stores the batter index (not name)
+  // so mid-match name edits stay reflected. Mirrors native FallOfWicket.
+  if (match.format !== 'pairs') {
+    if (!ing.fow) ing.fow = [];
+    ing.fow.push({ wicket: ing.wickets, score: ing.score, batterIdx: outBatter.idx, balls: ing.ballsBowled });
+  }
 
   // Check if all out / end of innings (standard + Hundred)
   if ((match.format === 'standard' || match.format === 'hundred') && ing.wickets >= match.wicketsToOut) {
@@ -1030,6 +1315,39 @@ function addWicket(howOut, batterOutPos, runsCompleted, crossed, fielderName) {
 
   // Standard: prompt for new batter, passing crossed info for strike rotation
   promptNewBatter(batterOutPos, crossed);
+}
+
+// Retire a batter NOT out (prep-cricket retirement). The batter leaves the crease
+// but is NOT dismissed: no wicket falls, the bowler is not credited, NO ball is
+// faced, and NO fall-of-wicket is recorded. Runs/balls are preserved and they can
+// be brought back later (a returning retiree resumes — see pickBatter). Not
+// supported in Pairs (batters never leave there). Mirrors engine.retire().
+function retire(position) {
+  if (match.result) return;
+  if (match.format === 'pairs') { showToast('No retirement in Pairs'); return; }
+  // A retirement is not a delivery, so it needs no bowler (matches native retire()).
+  snapshot();
+  record({ kind: 'retire', position: position === 'non-striker' ? 'non-striker' : 'striker' });
+  const ing = currentInnings();
+  const outIdx = position === 'non-striker' ? ing.nonStriker : ing.striker;
+  ing.batters[outIdx].retiredNotOut = true;
+  ing.batters[outIdx].in = false;
+  ing.batters[outIdx].howOut = 'retired not out';
+  // No ballsBowled / wickets / bowler change — a retirement is not a delivery.
+
+  // A retired batter can return, so "available" includes them later — but the one
+  // who has just retired is excluded here (they've only this instant left).
+  const available = ing.batters.filter(b => b.idx !== outIdx && !b.out && !b.in);
+  if (available.length === 0) {
+    // Nobody to come in — re-seat the retiree so the innings keeps two at the crease.
+    ing.batters[outIdx].retiredNotOut = false;
+    ing.batters[outIdx].in = true;
+    ing.batters[outIdx].howOut = null;
+    upsertMatch();
+    render();
+    return;
+  }
+  promptNewBatter(position, false, outIdx);
 }
 
 function swapStrike() {
@@ -1055,7 +1373,10 @@ function postBall() {
   // Check end of over (6 legal balls)
   const ing = currentInnings();
   const b = bowler();
-  if (b && b.ballsThisOver === ballsPerOver()) endOver();
+  // >= not ===: if the count ever passes ballsPerOver (e.g. a delivery recorded
+  // while a new batter was still pending), the over must still close — strict
+  // equality left it stuck open forever (the 9-ball-over bug).
+  if (b && b.ballsThisOver >= ballsPerOver()) endOver();
   // Check pairs cricket: end of pair's overs?
   if (match.format === 'pairs') {
     const p = currentPair();
@@ -1098,6 +1419,21 @@ function postBall() {
     }
   }
   upsertMatch();
+  render();
+}
+
+// Manually close the current over — scorer escape hatch for miscounts, an umpire
+// calling the over early, or a stuck over. Swaps strike and asks for the next
+// bowler, exactly like a natural over end. No-op without a bowler. Mirrors
+// engine.forceEndOver(). Records an endOver event so replay reproduces it.
+function forceEndOver() {
+  if (!match || match.result) return;
+  if (needBowler()) { showToast('No over in progress'); return; }
+  snapshot();
+  record({ kind: 'endOver' });
+  endOver();
+  upsertMatch();
+  closeModal();
   render();
 }
 
@@ -1190,25 +1526,49 @@ function promptBowler(isReplacement) {
 }
 function pickBowler(idx) {
   const ing = currentInnings();
+  // Mid-over replacement (injury / mis-tap): the incoming bowler completes the
+  // over, so carry the over-in-progress counters across. Without this the count
+  // restarts at 0 and the over stretches past ballsPerOver legal balls.
+  const cur = ing.currentBowler;
+  if (cur != null && cur !== idx && ing.bowlers[cur].ballsThisOver > 0) {
+    ing.bowlers[idx].ballsThisOver = ing.bowlers[cur].ballsThisOver;
+    ing.bowlers[idx].runsThisOver = ing.bowlers[cur].runsThisOver;
+    ing.bowlers[cur].ballsThisOver = 0;
+    ing.bowlers[cur].runsThisOver = 0;
+  }
   ing.currentBowler = idx;
+  record({ kind: 'pickBowler', bowler: idx });
   closeModal();
 }
-function promptNewBatter(position, crossed) {
+function promptNewBatter(position, crossed, excludeIdx) {
   const ing = currentInnings();
-  const available = ing.batters.filter(b => !b.out && !b.in);
+  // Available = not out and not currently in. Retired-not-out batters qualify
+  // (out=false, in=false) so they can be brought back. The one who has THIS instant
+  // left the crease (excludeIdx, on a retirement) is held back from their own prompt.
+  const available = ing.batters.filter(b => !b.out && !b.in && b.idx !== excludeIdx);
   if (available.length === 0) {
     endInnings();
     upsertMatch();
-    closeModal();
+    if (!_replay) closeModal();
     render();
     return;
   }
+  // Replay mode: record a pending marker for the replay loop to resolve, rather
+  // than opening a modal (there's no UI mid-replay).
+  if (_replay) { _replay.pending = { position, crossed: !!crossed }; return; }
   modal = { type: 'select-batter', data: { batters: available, position, crossed } };
   render();
 }
 function pickBatter(idx, position, crossed) {
   const ing = currentInnings();
+  record({ kind: 'newBatter', position, crossed: !!crossed, batter: idx });
   ing.batters[idx].in = true;
+  // A returning retired-not-out batter resumes (runs/balls already preserved):
+  // clear the retired flag and the "retired not out" note so they read live again.
+  if (ing.batters[idx].retiredNotOut) {
+    ing.batters[idx].retiredNotOut = false;
+    ing.batters[idx].howOut = null;
+  }
   // If batters crossed, the not-out batter has moved to the dismissed batter's end,
   // and the new batter takes the vacant end.
   if (position === 'striker') {
@@ -1263,6 +1623,7 @@ function closeModal() { modal = null; render(); }
 // RENDER
 // =========================================================================
 function render() {
+  if (_replay) return;   // never touch the DOM while replaying
   // Fresh innings — set up openers (standard/Hundred) or compose pairs (Pairs) first.
   if (view === 'scoring' && match && !modal) {
     const ing = currentInnings();
@@ -1280,6 +1641,7 @@ function render() {
   else if (view === 'setup') html = renderSetup();
   else if (view === 'scoring') html = renderScoring();
   else if (view === 'scorecard') html = renderScorecard();
+  else if (view === 'edit-balls') html = renderEditBalls();
   if (modal) html += renderModal();
   if (toast) html += `<div class="toast">${escapeHtml(toast)}</div>`;
   app.innerHTML = html;
@@ -1433,6 +1795,10 @@ function renderSetup() {
           <input type="checkbox" id="noBallRebowled" checked style="width:auto; margin:0;">
           <span style="margin:0; text-transform:none; letter-spacing:0; font-size:0.95rem; color:var(--ink-soft); font-weight:500;">No-balls are re-bowled (don't count as a ball)</span>
         </label>
+        <label style="display:flex; align-items:center; gap:10px; margin-bottom:4px; font-weight:600;">
+          <input type="checkbox" id="freeHitEnabled" style="width:auto; margin:0;">
+          <span style="margin:0; text-transform:none; letter-spacing:0; font-size:0.95rem; color:var(--ink-soft); font-weight:500;">No-ball gives a free hit (off by default)</span>
+        </label>
       </div>
       <button class="btn btn-primary btn-full" data-action="start-match">Start Match</button>
       <div style="height:40px;"></div>
@@ -1567,6 +1933,14 @@ function renderScorecard() {
           <span><strong style="color:var(--ink);">Extras:</strong> ${totalExtras} (w ${extras.wides}, nb ${extras.noBalls}, b ${extras.byes}, lb ${extras.legByes})</span>
           <span><strong style="color:var(--ink);">Total:</strong> ${ing.score}/${ing.wickets}</span>
         </div>
+        ${(ing.fow && ing.fow.length && match.format !== 'pairs') ? `
+        <div style="margin-top:8px; font-size:0.82rem; color:var(--muted); line-height:1.5;">
+          <strong style="color:var(--ink);">Fall of wickets:</strong>
+          ${ing.fow.map(f => {
+            const b = ing.batters[f.batterIdx];
+            return `${f.wicket}-${f.score} <span style="opacity:0.8;">(${b ? escapeHtml(b.name) : ''}, ${oversString(f.balls)})</span>`;
+          }).join(' &nbsp;·&nbsp; ')}
+        </div>` : ''}
         <hr>
         <table class="scorecard-table">
           <thead><tr><th>Bowler</th><th class="num">${match.format === 'hundred' ? 'B' : 'O'}</th><th class="num">M</th><th class="num">R</th><th class="num">W</th></tr></thead>
@@ -1600,8 +1974,72 @@ function renderScorecard() {
   `;
 }
 
+// Ball-by-ball editor. Lists every delivery event with its label and an over/ball
+// marker, derived by replaying the log up to each point. Delete or change a ball;
+// the whole match is rebuilt from the edited log so totals can never desync.
+function renderEditBalls() {
+  const events = match.events || [];
+  // Derive an over/ball position + striker/bowler context for each delivery by a
+  // lightweight replay that annotates as it goes (reusing the real replay engine).
+  const points = {};
+  // Build context cheaply: re-run replay but capture per-delivery context.
+  // (Simple approach: walk events and track legal-ball count per innings.)
+  let inn = 0, legal = 0, deliveryNo = 0;
+  const bpo = match.format === 'hundred' ? 5 : 6;
+  const rows = events.map((ev, i) => {
+    if (isDelivery(ev)) {
+      deliveryNo++;
+      const over = Math.floor(legal / bpo);
+      const ballInOver = (legal % bpo) + 1;
+      // Count this as a legal ball unless it's a re-bowled wide/no-ball.
+      const isRebowled = ev.kind === 'extra' && ((ev.extra === 'wd' && match.wideRebowled !== false) || (ev.extra === 'nb' && match.noBallRebowled !== false));
+      const posLabel = `${over}.${ballInOver}`;
+      if (!isRebowled) legal++;
+      const pip = eventLabel(ev);
+      const cls = ev.kind === 'wicket' ? 'wicket' : (ev.kind === 'extra' ? 'extra' : ((ev.runs === 4 || ev.runs === 6) ? 'boundary' : ''));
+      const canChange = ev.kind !== 'wicket';   // wickets: delete + re-enter
+      return `
+        <div style="display:flex; align-items:center; gap:10px; padding:8px 4px; border-bottom:1px solid var(--line);">
+          <span class="ball-pip ${cls}" style="flex-shrink:0;">${escapeHtml(pip)}</span>
+          <span style="flex:1; font-size:0.85rem; color:var(--muted);">${posLabel}</span>
+          ${canChange ? `<button class="btn btn-ghost" data-action="edit-ball-change" data-eidx="${i}" style="padding:6px 10px; font-size:0.8rem; min-height:auto;">Change</button>` : ''}
+          <button class="btn btn-ghost" data-action="edit-ball-delete" data-eidx="${i}" style="padding:6px 10px; font-size:0.8rem; min-height:auto; color:var(--red);">Delete</button>
+        </div>`;
+    }
+    return '';
+  }).filter(Boolean).join('');
+  return `
+    <header>
+      <button class="icon-btn" data-action="back-to-scoring">←</button>
+      <h1>Edit Ball-by-Ball</h1>
+    </header>
+    <main>
+      <div class="card">
+        <div class="muted" style="margin-bottom:10px; font-size:0.85rem;">Delete or change any delivery. The scorecard is rebuilt from scratch each time, so totals always stay correct. Wickets are delete-and-re-enter.</div>
+        ${rows || '<div class="muted center" style="padding:20px;">No deliveries yet.</div>'}
+      </div>
+      <div style="height:40px;"></div>
+    </main>
+  `;
+}
+
 function renderModal() {
   let body = '';
+  if (modal.type === 'editor-runs') {
+    const ev = match.events[modal.data.eidx];
+    const isExtra = ev.kind === 'extra';
+    const t = isExtra ? ev.extra : 'runs';
+    const labels = { runs: 'Runs off the bat', wd: 'Wide + runs', nb: 'No-ball + runs', b: 'Byes', lb: 'Leg byes' };
+    const opts = (t === 'b' || t === 'lb') ? [1,2,3,4] : [0,1,2,3,4,6];
+    return `<div class="modal-backdrop" data-action="close-modal-backdrop"><div class="modal">
+      <h2>${labels[t] || 'Runs'}</h2>
+      <div class="muted" style="margin-bottom:10px;">Pick the corrected value for this delivery.</div>
+      <div class="modal-grid">
+        ${opts.map(n => `<button class="btn btn-primary" data-action="editor-set-runs" data-eidx="${modal.data.eidx}" data-runs="${n}">${n}</button>`).join('')}
+      </div>
+      <button class="btn btn-ghost btn-full" data-action="close-modal" style="margin-top:10px;">Cancel</button>
+    </div></div>`;
+  }
   if (modal.type === 'select-bowler') {
     body = `
       <h2>Select Bowler</h2>
@@ -1681,12 +2119,28 @@ function renderModal() {
       <button class="btn btn-ghost btn-full" data-action="close-modal" style="margin-top:10px;">Cancel</button>
     </div></div>`;
   } else if (modal.type === 'wicket-method') {
+    // On a free hit only a run-out can dismiss the batter — gate the menu to it.
+    // (Retired is NOT a dismissal — it has its own menu action, not listed here.)
+    const onFreeHit = currentInnings().freeHit;
+    const methods = onFreeHit ? ['Run out'] : ['Bowled', 'Caught', 'LBW', 'Run out', 'Stumped', 'Hit wicket'];
     body = `
       <h2>How Out?</h2>
+      ${onFreeHit ? '<div class="muted" style="margin-bottom:10px; font-size:0.85rem; color:var(--gold-deep); font-weight:600;">Free hit — only a run out counts.</div>' : ''}
       <div class="modal-list">
-        ${['Bowled', 'Caught', 'LBW', 'Run out', 'Stumped', 'Hit wicket', 'Retired'].map(m => `
+        ${methods.map(m => `
           <button class="btn btn-secondary" data-action="wicket-method" data-method="${m}">${m}</button>
         `).join('')}
+      </div>
+      <button class="btn btn-ghost btn-full" data-action="close-modal" style="margin-top:10px;">Cancel</button>
+    `;
+  } else if (modal.type === 'retire-which') {
+    const ing = currentInnings();
+    body = `
+      <h2>Retire (not out)</h2>
+      <div class="muted" style="margin-bottom:10px; font-size:0.88rem;">No wicket falls. The batter keeps their runs and can return later.</div>
+      <div class="row">
+        <button class="btn btn-primary" data-action="do-retire" data-position="striker">${escapeHtml(striker().name)} <span style="opacity:0.7; font-size:0.8rem; margin-left:4px;">(striker)</span></button>
+        <button class="btn btn-primary" data-action="do-retire" data-position="non-striker">${escapeHtml(nonStriker().name)} <span style="opacity:0.7; font-size:0.8rem; margin-left:4px;">(non-str)</span></button>
       </div>
       <button class="btn btn-ghost btn-full" data-action="close-modal" style="margin-top:10px;">Cancel</button>
     `;
@@ -1760,7 +2214,10 @@ function renderModal() {
         <button class="btn btn-secondary" data-action="edit-settings">Edit Match Settings / Rules</button>
         <button class="btn btn-secondary" data-action="edit-names">Edit Player Names</button>
         <button class="btn btn-secondary" data-action="change-bowler">Change Bowler (mid-over)</button>
+        <button class="btn btn-secondary" data-action="force-end-over">End Over Now</button>
         <button class="btn btn-secondary" data-action="swap-batters">Swap Striker / Non-Striker</button>
+        ${match.format !== 'pairs' ? '<button class="btn btn-secondary" data-action="retire-batter">Retire Batter (not out)</button>' : ''}
+        <button class="btn btn-secondary" data-action="edit-balls">Edit Ball-by-Ball</button>
         <button class="btn btn-secondary" data-action="end-innings-confirm">End Innings</button>
         <button class="btn btn-secondary" data-action="goto-home">Save &amp; Exit</button>
       </div>
@@ -1829,6 +2286,10 @@ function renderModal() {
       <label style="display:flex; align-items:center; gap:10px; margin-bottom:4px;">
         <input type="checkbox" id="es-noBallRebowled" ${match.noBallRebowled !== false ? 'checked' : ''} style="width:auto; margin:0;">
         <span style="margin:0; text-transform:none; letter-spacing:0; font-size:0.95rem; color:var(--ink-soft); font-weight:500;">No-balls are re-bowled</span>
+      </label>
+      <label style="display:flex; align-items:center; gap:10px; margin-bottom:4px;">
+        <input type="checkbox" id="es-freeHitEnabled" ${match.freeHitEnabled ? 'checked' : ''} style="width:auto; margin:0;">
+        <span style="margin:0; text-transform:none; letter-spacing:0; font-size:0.95rem; color:var(--ink-soft); font-weight:500;">No-ball gives a free hit</span>
       </label>
       <div class="row" style="margin-top:14px;">
         <button class="btn btn-ghost" data-action="close-modal">Cancel</button>
@@ -2044,7 +2505,15 @@ function handleAction(e) {
   if (action === 'toggle-theme') { closeModal(); toggleTheme(); return; }
   if (action === 'new-match') { view = 'setup'; render(); return; }
   if (action === 'goto-home') { view = 'home'; modal = null; render(); return; }
-  if (action === 'open-match') { match = matches.find(m => m.id === el.dataset.id); view = match.result ? 'scorecard' : 'scoring'; stateHistory = []; render(); return; }
+  if (action === 'open-match') {
+    match = matches.find(m => m.id === el.dataset.id);
+    normalizeMatch(match);
+    if (!match.undoStack) match.undoStack = [];
+    stateHistory = match.undoStack;   // resume the persisted undo stack (survives reload)
+    view = match.result ? 'scorecard' : 'scoring';
+    render();
+    return;
+  }
   if (action === 'delete-match') {
     if (!confirm('Delete this match?')) return;
     matches = matches.filter(m => m.id !== el.dataset.id);
@@ -2064,6 +2533,7 @@ function handleAction(e) {
       noBallPenalty: parseInt(document.getElementById('noBallPenalty').value) || 1,
       wideRebowled: document.getElementById('wideRebowled').checked,
       noBallRebowled: document.getElementById('noBallRebowled').checked,
+      freeHitEnabled: document.getElementById('freeHitEnabled').checked,
       playersA: document.getElementById('playersA').value.split('\n').map(s => s.trim()).filter(Boolean),
       playersB: document.getElementById('playersB').value.split('\n').map(s => s.trim()).filter(Boolean),
     };
@@ -2081,7 +2551,7 @@ function handleAction(e) {
     }
     match = createMatch(opts);
     upsertMatch();
-    stateHistory = [];
+    stateHistory = match.undoStack;
     view = 'scoring';
     render();
     return;
@@ -2170,6 +2640,7 @@ function handleAction(e) {
       ing.batters[ing.striker].in = true;
       ing.batters[ing.nonStriker].in = true;
       ing.openersSet = true;
+      record({ kind: 'setOpeners', striker: ing.striker, nonStriker: ing.nonStriker });
       upsertMatch();
       closeModal();
     }
@@ -2183,9 +2654,16 @@ function handleAction(e) {
   if (action === 'show-menu') { modal = { type: 'menu' }; render(); return; }
   if (action === 'change-bowler') { closeModal(); promptBowler(true); return; }
   if (action === 'swap-batters') {
-    snapshot(); swapStrike(); upsertMatch(); closeModal(); render();
+    snapshot(); record({ kind: 'swapStrike' }); swapStrike(); upsertMatch(); closeModal(); render();
     return;
   }
+  if (action === 'force-end-over') { forceEndOver(); return; }
+  if (action === 'retire-batter') { modal = { type: 'retire-which' }; render(); return; }
+  if (action === 'do-retire') { const pos = el.dataset.position; closeModal(); retire(pos); return; }
+  if (action === 'edit-balls') { closeModal(); openBallEditor(); return; }
+  if (action === 'edit-ball-delete') { editorDeleteBall(parseInt(el.dataset.eidx)); return; }
+  if (action === 'edit-ball-change') { editorChangeBall(parseInt(el.dataset.eidx)); return; }
+  if (action === 'editor-set-runs') { editorApplyRuns(parseInt(el.dataset.eidx), parseInt(el.dataset.runs)); return; }
   if (action === 'end-innings-confirm') {
     if (!confirm('End this innings?')) return;
     snapshot(); endInnings(); upsertMatch(); closeModal(); render();
@@ -2213,6 +2691,9 @@ function handleAction(e) {
     match.noBallPenalty = Math.max(1, num('es-noBallPenalty', match.noBallPenalty || 1));
     match.wideRebowled = document.getElementById('es-wideRebowled').checked;
     match.noBallRebowled = document.getElementById('es-noBallRebowled').checked;
+    match.freeHitEnabled = document.getElementById('es-freeHitEnabled').checked;
+    // Turning free hits off mid-match clears any free hit already signalled.
+    if (!match.freeHitEnabled) match.innings.forEach(ing => { ing.freeHit = false; });
     upsertMatch();
     closeModal();
     showToast('Match settings updated');
